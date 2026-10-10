@@ -38,7 +38,7 @@ type fakeResolver struct {
 	err      error
 }
 
-func (f *fakeResolver) Embedder(context.Context) (enginemodel.Embedder, error) {
+func (f *fakeResolver) Embedder(context.Context, enginemodel.ScopeRef) (enginemodel.Embedder, error) {
 	if f.err != nil {
 		return nil, f.err
 	}

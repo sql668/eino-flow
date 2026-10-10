@@ -36,6 +36,8 @@ type Config struct {
 	Milvus   MilvusConfig   `yaml:"milvus"`
 	MinIO    MinIOConfig    `yaml:"minio"`
 	MinerU   MinerUConfig   `yaml:"mineru"`
+	// Security 是安全相关配置（凭证加密密钥）。
+	Security SecurityConfig `yaml:"security"`
 	// Embedding / Retrieval 是模型与检索配置。
 	// 阶段 1 先走配置文件（见 docs/PROGRESS.md 第 7 节），阶段 2 会换成数据库驱动，
 	// 届时这两节的定位变成「默认值 + 兜底」，消费方（engine/rag）不用改。
@@ -172,6 +174,16 @@ type EmbeddingConfig struct {
 // 这里的值是**兜底默认**：请求未指定 top_k 时生效，请求指定时以请求为准（上限见 maxRetrievalTopK）。
 type RetrievalConfig struct {
 	TopK int `yaml:"top_k"`
+}
+
+// SecurityConfig 描述安全相关配置。
+type SecurityConfig struct {
+	// SecretKey 是模型凭证的加密密钥（AES-256-GCM，32 字节）。
+	//
+	// 只允许通过环境变量 EINOFLOW_SECRET_KEY 注入：写进配置文件等于把密钥写进仓库。
+	// 生成方式见 .env.example（openssl rand -base64 32）。
+	// **换了密钥，已存的凭证就解不开了**，需要重新填写——这是刻意的，不做自动降级。
+	SecretKey string `yaml:"secret_key"`
 }
 
 // MinIOConfig 描述对象存储配置。
@@ -410,6 +422,9 @@ func (c *Config) applyEnvOverrides() {
 	if v, ok := envInt("EINOFLOW_RETRIEVAL_TOP_K"); ok {
 		c.Retrieval.TopK = v
 	}
+	if v, ok := envString("EINOFLOW_SECRET_KEY"); ok {
+		c.Security.SecretKey = v
+	}
 	if v, ok := envString("EINOFLOW_MINIO_ENDPOINT"); ok {
 		c.MinIO.Endpoint = v
 	}
@@ -471,6 +486,11 @@ func (c *Config) validate() error {
 	if c.Retrieval.TopK <= 0 || c.Retrieval.TopK > model.MaxRetrievalTopK {
 		return fmt.Errorf("retrieval.top_k 必须在 1..%d 之间，当前为 %d",
 			model.MaxRetrievalTopK, c.Retrieval.TopK)
+	}
+	if c.Security.SecretKey == "" {
+		return fmt.Errorf(
+			"未配置 security.secret_key（模型凭证的加密密钥）；" +
+				"请生成一个并写入 .env：openssl rand -base64 32")
 	}
 	return nil
 }

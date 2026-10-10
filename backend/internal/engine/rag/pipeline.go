@@ -169,7 +169,9 @@ func (p *Pipeline) vectorize(ctx context.Context, doc *model.Document, segments 
 		return nil
 	}
 
-	embedder, err := p.models.Embedder(ctx)
+	// 按知识库解析模型：知识库可以有自己的向量模型（同 Dify），
+	// 未配置时 resolver 会回落到全局默认。
+	embedder, err := p.models.Embedder(ctx, enginemodel.ScopeRef{DatasetID: doc.DatasetID})
 	if err != nil {
 		return fmt.Errorf("获取向量化模型失败: %w", err)
 	}

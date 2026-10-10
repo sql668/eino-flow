@@ -36,11 +36,23 @@ type Embedder interface {
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 }
 
+// ScopeRef 指定「为谁解析模型」。
+//
+// 三级覆盖与 Dify 一致：知识库 > 应用 > 全局（见 docs/PROGRESS.md D3）。
+// 零值表示全局默认，因此调用方只在确有覆盖需求时才填 ID。
+type ScopeRef struct {
+	AppID     uint64
+	DatasetID uint64
+}
+
 // Resolver 提供当前生效的模型实例。
 //
 // 之所以是接口：解析来源要从「配置文件」演进到「数据库 + 应用级覆盖」，
 // 调用方只依赖本接口，换实现时不用改。
 type Resolver interface {
-	// Embedder 返回当前生效的向量化模型。
-	Embedder(ctx context.Context) (Embedder, error)
+	// Embedder 返回该作用域下生效的向量化模型。
+	//
+	// 带 scope 而不是无参：知识库可以用自己的向量模型（同 Dify），
+	// 而入库与检索必须用**同一个**模型，否则两边向量不在同一空间，检索会退化成噪声。
+	Embedder(ctx context.Context, scope ScopeRef) (Embedder, error)
 }

@@ -91,7 +91,9 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 		topK = r.defaultTopK
 	}
 
-	embedder, err := r.models.Embedder(ctx)
+	// 用与入库同一个作用域解析模型：知识库级覆盖必须两边一致，
+	// 一边用 A 模型入库、一边用 B 模型检索，向量不在同一空间，检索结果就是噪声。
+	embedder, err := r.models.Embedder(ctx, model.ScopeRef{DatasetID: req.DatasetID})
 	if err != nil {
 		return RetrieveOutput{}, fmt.Errorf("获取向量化模型失败: %w", err)
 	}

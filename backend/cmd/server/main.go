@@ -14,6 +14,7 @@ import (
 
 	"einoflow-backend/internal/config"
 	// 别名：下面还有一个解析器注册表变量名叫 resolver（文档解析器），避免混淆。
+	enginemodel "einoflow-backend/internal/engine/model"
 	modelresolver "einoflow-backend/internal/engine/model/resolver"
 	"einoflow-backend/internal/engine/rag"
 	"einoflow-backend/internal/engine/rag/chunker"
@@ -24,6 +25,7 @@ import (
 	milvusstore "einoflow-backend/internal/repository/milvus"
 	miniostore "einoflow-backend/internal/repository/minio"
 	"einoflow-backend/internal/repository/postgres"
+	"einoflow-backend/internal/security"
 	"einoflow-backend/internal/service"
 )
 
@@ -74,6 +76,9 @@ func main() {
 	documentRepository := postgres.NewDocumentRepository(client)
 	segmentRepository := postgres.NewSegmentRepository(client)
 	retrievalRepository := postgres.NewRetrievalRepository(client)
+	modelProviderRepository := postgres.NewModelProviderRepository(client)
+	modelInstanceRepository := postgres.NewModelInstanceRepository(client)
+	modelBindingRepository := postgres.NewModelBindingRepository(client)
 
 	appService := service.NewAppService(appRepository)
 	datasetService := service.NewDatasetService(datasetRepository)
@@ -111,18 +116,47 @@ func main() {
 
 	// 向量化模型：构造时即完成「可用性 + 维度」探测（见 resolver 包注释）。
 	// 维度不在配置里写死，避免换模型后留下错值。
-	modelResolver, err := modelresolver.New(ctx, modelresolver.Options{
+	// 配置兜底解析器：数据库里还没有任何模型绑定时用它，保证「刚部署完」也能跑起来。
+	fallbackResolver, err := modelresolver.New(ctx, modelresolver.Options{
 		EmbeddingProvider:  cfg.Embedding.Provider,
 		EmbeddingBaseURL:   cfg.Embedding.BaseURL,
 		EmbeddingModel:     cfg.Embedding.Model,
 		EmbeddingBatchSize: cfg.Embedding.BatchSize,
 	})
 	if err != nil {
-		log.Fatalf("初始化向量化模型失败: %v", err)
+		log.Fatalf("初始化兜底向量化模型失败: %v", err)
 	}
-	embedder, err := modelResolver.Embedder(ctx)
+
+	// 凭证加密器：密钥只来自环境变量，缺失时启动失败（见 config 校验）。
+	secretKey, err := security.ParseKey(cfg.Security.SecretKey)
 	if err != nil {
-		log.Fatalf("获取向量化模型失败: %v", err)
+		log.Fatalf("解析加密密钥失败: %v", err)
+	}
+	credentialCipher, err := security.NewCipher(secretKey)
+	if err != nil {
+		log.Fatalf("初始化凭证加密器失败: %v", err)
+	}
+
+	// 模型解析：数据库优先（全局 / 应用 / 知识库三级覆盖），配置兜底。
+	modelResolver, err := modelresolver.NewDatabase(modelresolver.DatabaseOptions{
+		Cipher:    credentialCipher,
+		Providers: modelProviderRepository,
+		Instances: modelInstanceRepository,
+		Bindings:  modelBindingRepository,
+		Fallback:  fallbackResolver,
+	})
+	if err != nil {
+		log.Fatalf("初始化模型解析器失败: %v", err)
+	}
+
+	// 启动时的向量维度以「当前生效模型」为准，并与已有集合校验。
+	effective, err := modelResolver.EmbedderFor(ctx, enginemodel.ScopeRef{})
+	if err != nil {
+		log.Fatalf("获取当前生效的向量化模型失败: %v", err)
+	}
+	embedder := effective.Embedder
+	if effective.InstanceID == 0 {
+		log.Printf("当前向量化模型来自配置文件（尚未在「模型配置」中绑定）: %s", embedder.Name())
 	}
 
 	// 向量库：连不上或维度与已有集合不一致时直接启动失败。
@@ -173,6 +207,16 @@ func main() {
 	documentService := service.NewDocumentService(
 		datasetRepository, documentRepository, segmentRepository, objectStore, pipeline)
 
+	modelConfigService := service.NewModelConfigService(service.ModelConfigDeps{
+		Cipher:    credentialCipher,
+		Providers: modelProviderRepository,
+		Instances: modelInstanceRepository,
+		Bindings:  modelBindingRepository,
+		Apps:      appRepository,
+		Datasets:  datasetRepository,
+		Resolver:  modelResolver,
+	})
+
 	retriever := rag.NewRetriever(rag.RetrieverDeps{
 		Models:      modelResolver,
 		Vectors:     vectorStore,
@@ -208,6 +252,7 @@ func main() {
 		Conversations: conversationService,
 		Documents:     documentService,
 		Searches:      retrievalService,
+		ModelConfig:   modelConfigService,
 	})
 
 	log.Printf("EinoFlow 后端启动中: env=%s addr=%s", cfg.App.Env, cfg.Server.Addr())

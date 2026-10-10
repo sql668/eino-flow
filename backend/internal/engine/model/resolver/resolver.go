@@ -55,7 +55,10 @@ func New(ctx context.Context, opts Options) (*ConfigResolver, error) {
 }
 
 // Embedder 实现 model.Resolver。
-func (r *ConfigResolver) Embedder(context.Context) (model.Embedder, error) {
+//
+// 忽略 scope：配置文件里的模型是全局唯一的一份，没有「知识库覆盖」这个概念。
+// 需要覆盖能力时请用 DatabaseResolver（它会按作用域解析，并把它作为兜底）。
+func (r *ConfigResolver) Embedder(context.Context, model.ScopeRef) (model.Embedder, error) {
 	return r.embedder, nil
 }
 
