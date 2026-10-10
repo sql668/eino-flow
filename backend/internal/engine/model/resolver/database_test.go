@@ -179,6 +179,13 @@ func (r *fallbackResolver) Embedder(
 	return fakeEmbedder{name: r.name}, nil
 }
 
+// ChatModel 模拟配置文件不提供对话模型兜底：返回 ErrNotConfigured。
+func (r *fallbackResolver) ChatModel(
+	context.Context, enginemodel.ScopeRef,
+) (enginemodel.ChatModel, error) {
+	return nil, enginemodel.ErrNotConfigured
+}
+
 // Reranker 模拟配置文件里没配重排：返回 ErrNotConfigured。
 func (r *fallbackResolver) Reranker(
 	context.Context, enginemodel.ScopeRef,

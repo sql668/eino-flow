@@ -149,6 +149,18 @@ func buildProbeResult(okMessage string, models []string, want string) ProbeResul
 	return result
 }
 
+// NewChatModel 构造 Ollama 对话模型。
+func (p *ollamaProvider) NewChatModel(cfg Config) (enginemodel.ChatModel, error) {
+	if strings.TrimSpace(cfg.ModelName) == "" {
+		return nil, fmt.Errorf("未指定对话模型名")
+	}
+	return ollama.NewChatModel(ollama.ChatOptions{
+		BaseURL: cfg.BaseURLOrDefault(p.DefaultBaseURL()),
+		Model:   strings.TrimSpace(cfg.ModelName),
+		Token:   cfg.Credential("api_key"),
+	}), nil
+}
+
 // NewReranker 明确不支持：实测 Ollama 没有 /rerank 端点，其重排模型调用即 GGML_ASSERT 崩溃（D5）。
 //
 // 错误信息里直接给出替代方案：只说「不支持」会让使用者去反复试模型名，

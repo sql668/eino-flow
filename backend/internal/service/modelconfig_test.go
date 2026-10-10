@@ -310,6 +310,12 @@ func (r *stubResolver) Effective(
 	return r.effective, nil
 }
 
+func (r *stubResolver) ChatModel(
+	context.Context, enginemodel.ScopeRef,
+) (enginemodel.ChatModel, error) {
+	return nil, enginemodel.ErrNotConfigured
+}
+
 func (r *stubResolver) Invalidate() { r.invalidatd++ }
 
 // ---------- 测试脚手架 ----------

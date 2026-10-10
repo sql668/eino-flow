@@ -16,6 +16,7 @@ type Deps struct {
 	Documents     *service.DocumentService
 	Searches      *service.RetrievalService
 	ModelConfig   *service.ModelConfigService
+	Chats         *service.ChatService
 }
 
 // Register 把全部 HTTP 路由注册到 Hertz server。
@@ -29,5 +30,6 @@ func Register(h *server.Hertz, deps Deps) {
 	registerDocumentRoutes(apiV1, deps.Documents)
 	registerSearchRoutes(apiV1, deps.Searches)
 	registerModelConfigRoutes(apiV1, deps.ModelConfig)
+	registerChatRoutes(apiV1, deps.Chats)
 	// TODO(V0.1): 继续挂载流式对话调试路由。
 }

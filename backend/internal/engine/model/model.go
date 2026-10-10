@@ -14,6 +14,8 @@ package model
 import (
 	"context"
 	"errors"
+
+	einomodel "github.com/cloudwego/eino/components/model"
 )
 
 // 领域错误。
@@ -23,6 +25,8 @@ var (
 	// ErrDimensionMismatch 表示模型输出维度与已建索引不一致。
 	// 这种情况必须显式失败：维度不匹配的向量写进索引后，检索结果会变成一堆噪声，且极难排查。
 	ErrDimensionMismatch = errors.New("向量维度与索引不一致")
+	// ErrChatUnsupported 表示该厂商不提供对话能力。
+	ErrChatUnsupported = errors.New("该厂商不支持对话")
 	// ErrEmbeddingUnsupported 表示该厂商不提供向量化能力。
 	//
 	// 与 ErrNotConfigured 分开：前者要换厂商（例如 DeepSeek 没有 embedding 接口），
@@ -45,6 +49,14 @@ type Embedder interface {
 	// Embed 批量向量化。返回结果与入参一一对应，顺序一致。
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
 }
+
+// ChatModel 是对话模型。
+//
+// 直接复用 Eino 的接口（Generate / Stream）而不是自建一套：
+// 编排层（compose 的 Chain / Graph 节点）只认这个接口，
+// 我们再包一层同名接口只会多一次无意义的类型转换。
+// 厂商实现只要满足它，就能被 Eino 的图直接编排。
+type ChatModel = einomodel.BaseChatModel
 
 // Reranker 对候选文档按与查询的相关性重新打分。
 //
@@ -76,6 +88,8 @@ type Resolver interface {
 	// 带 scope 而不是无参：知识库可以用自己的向量模型（同 Dify），
 	// 而入库与检索必须用**同一个**模型，否则两边向量不在同一空间，检索会退化成噪声。
 	Embedder(ctx context.Context, scope ScopeRef) (Embedder, error)
+	// ChatModel 返回该作用域下生效的对话模型。
+	ChatModel(ctx context.Context, scope ScopeRef) (ChatModel, error)
 	// Reranker 返回该作用域下生效的重排模型。
 	//
 	// 未配置时返回 ErrNotConfigured：调用方据此**跳过重排并说明原因**，

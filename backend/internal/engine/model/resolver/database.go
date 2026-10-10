@@ -52,8 +52,9 @@ type cachedModel struct {
 
 // 缓存键前缀。
 const (
-	cacheKeyEmbedder = "embed"
-	cacheKeyReranker = "rerank"
+	cacheKeyEmbedder  = "embed"
+	cacheKeyReranker  = "rerank"
+	cacheKeyChatModel = "chat"
 )
 
 // cacheKey 拼缓存键。
@@ -166,6 +167,99 @@ func (r *DatabaseResolver) Effective(
 	default:
 		return EffectiveModel{}, fmt.Errorf("不支持的模型类型 %q", kind)
 	}
+}
+
+// ChatModel 实现 enginemodel.Resolver。
+func (r *DatabaseResolver) ChatModel(ctx context.Context, scope enginemodel.ScopeRef) (enginemodel.ChatModel, error) {
+	effective, err := r.ChatModelFor(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	return effective.ChatModel, nil
+}
+
+// EffectiveChatModel 是「生效对话模型 + 可用实例」的组合。
+type EffectiveChatModel struct {
+	EffectiveModel
+	ChatModel enginemodel.ChatModel
+}
+
+// ChatModelFor 解析并返回当前生效的对话模型及其来源信息。
+func (r *DatabaseResolver) ChatModelFor(
+	ctx context.Context, scope enginemodel.ScopeRef,
+) (EffectiveChatModel, error) {
+	resolved, err := r.resolve(ctx, scope, model.ModelTypeLLM)
+	if err != nil {
+		return EffectiveChatModel{}, err
+	}
+	if resolved == nil {
+		// 对话模型没有配置兜底（配置文件里没有 llm 一节）：
+		// 没配就明确报「未配置」，由调用方提示去配置页设置。
+		return EffectiveChatModel{}, fmt.Errorf(
+			"%w: 尚未配置对话模型（可在「模型配置」中添加并设为默认）", enginemodel.ErrNotConfigured)
+	}
+
+	chatModel, err := r.chatModelFor(*resolved.instance, *resolved.provider)
+	if err != nil {
+		return EffectiveChatModel{}, err
+	}
+	return EffectiveChatModel{
+		EffectiveModel: EffectiveModel{
+			InstanceID:   resolved.instance.ID,
+			Provider:     resolved.provider.Provider,
+			ProviderName: providerLabel(*resolved.provider),
+			ModelName:    resolved.instance.ModelName,
+			ModelType:    resolved.instance.ModelType,
+			BaseURL:      resolved.provider.BaseURL,
+			Scope:        resolved.scope,
+		},
+		ChatModel: chatModel,
+	}, nil
+}
+
+// chatModelFor 构造（或取缓存）对话实现。
+func (r *DatabaseResolver) chatModelFor(
+	instance model.ModelInstance, provider model.ModelProvider,
+) (enginemodel.ChatModel, error) {
+	if cached, ok := r.cachedChatModel(instance.ID); ok {
+		return cached, nil
+	}
+
+	plugin, err := providers.Get(provider.Provider)
+	if err != nil {
+		return nil, err
+	}
+	if !providers.Supports(plugin, instance.ModelType) {
+		return nil, fmt.Errorf("%w: 厂商 %s 不支持 %s 类型（该厂商支持：%v）",
+			enginemodel.ErrChatUnsupported, plugin.DisplayName(), instance.ModelType, plugin.Kinds())
+	}
+
+	credentials, err := r.decryptCredentials(provider)
+	if err != nil {
+		return nil, err
+	}
+	chatModel, err := plugin.NewChatModel(providers.Config{
+		Provider:    provider.Provider,
+		BaseURL:     provider.BaseURL,
+		ModelName:   instance.ModelName,
+		Credentials: credentials,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	r.cachePut(cacheKey(cacheKeyChatModel, instance.ID), chatModel)
+	return chatModel, nil
+}
+
+// cachedChatModel 读取未过期的对话实现缓存。
+func (r *DatabaseResolver) cachedChatModel(instanceID uint64) (enginemodel.ChatModel, bool) {
+	value, ok := r.cacheGet(cacheKey(cacheKeyChatModel, instanceID))
+	if !ok {
+		return nil, false
+	}
+	chatModel, ok := value.(enginemodel.ChatModel)
+	return chatModel, ok
 }
 
 // Reranker 实现 enginemodel.Resolver。

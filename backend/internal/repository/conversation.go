@@ -36,6 +36,11 @@ type MessageListFilter struct {
 type MessageRepository interface {
 	Create(ctx context.Context, message *model.Message) error
 	List(ctx context.Context, filter MessageListFilter) ([]*model.Message, int64, error)
+	// ListRecent 取最近 limit 条消息，按时间**正序**返回。
+	//
+	// 单独一个方法而不是用 List + Offset：倒序取最近 N 条要先知道总数，
+	// 两次查询既慢，又会在并发写入时取错区间。
+	ListRecent(ctx context.Context, conversationID uint64, limit int) ([]*model.Message, error)
 	// DeleteByConversation 删除某个会话下的全部消息，返回删除条数。
 	DeleteByConversation(ctx context.Context, conversationID uint64) (int64, error)
 }

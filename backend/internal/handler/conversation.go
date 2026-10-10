@@ -64,9 +64,11 @@ type messageResponse struct {
 	ConversationID uint64 `json:"conversationId"`
 	Role           string `json:"role"`
 	Content        string `json:"content"`
-	TokenCount     int    `json:"tokenCount"`
-	LatencyMS      int    `json:"latencyMs"`
-	CreatedAt      string `json:"createdAt"`
+	// Citations 是助手消息引用的片段：历史会话里回看时仍能看到来源（可溯源要求）。
+	Citations  []model.MessageCitation `json:"citations,omitempty"`
+	TokenCount int                     `json:"tokenCount"`
+	LatencyMS  int                     `json:"latencyMs"`
+	CreatedAt  string                  `json:"createdAt"`
 }
 
 type messageListResponse struct {
@@ -92,6 +94,7 @@ func newMessageResponse(m *model.Message) messageResponse {
 		ConversationID: m.ConversationID,
 		Role:           string(m.Role),
 		Content:        m.Content,
+		Citations:      m.Citations,
 		TokenCount:     m.TokenCount,
 		LatencyMS:      m.LatencyMS,
 		CreatedAt:      formatTime(m.CreatedAt),

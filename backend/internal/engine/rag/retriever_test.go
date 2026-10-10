@@ -48,6 +48,11 @@ func (f *fakeResolver) Embedder(context.Context, enginemodel.ScopeRef) (enginemo
 	return f.embedder, nil
 }
 
+func (f *fakeResolver) ChatModel(context.Context, enginemodel.ScopeRef) (enginemodel.ChatModel, error) {
+	// 检索器的测试不涉及对话：只要让替身满足接口即可。
+	return nil, enginemodel.ErrNotConfigured
+}
+
 func (f *fakeResolver) Reranker(context.Context, enginemodel.ScopeRef) (enginemodel.Reranker, error) {
 	if f.rerankerErr != nil {
 		return nil, f.rerankerErr

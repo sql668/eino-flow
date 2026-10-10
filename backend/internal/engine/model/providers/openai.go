@@ -75,6 +75,18 @@ func (p *openaiCompatibleProvider) NewEmbedder(cfg Config) (enginemodel.Embedder
 	return instance, nil
 }
 
+// NewChatModel 构造 OpenAI 兼容的对话模型。
+func (p *openaiCompatibleProvider) NewChatModel(cfg Config) (enginemodel.ChatModel, error) {
+	if strings.TrimSpace(cfg.ModelName) == "" {
+		return nil, fmt.Errorf("未指定对话模型名")
+	}
+	return openai.NewChatModel(openai.ChatOptions{
+		BaseURL: cfg.BaseURLOrDefault(p.DefaultBaseURL()),
+		Model:   strings.TrimSpace(cfg.ModelName),
+		APIKey:  cfg.Credential("api_key"),
+	}), nil
+}
+
 // NewReranker 不支持：OpenAI 兼容协议里没有统一的重排接口
 // （各家的重排端点路径与出入参都不一样），因此不在这个厂商里硬凑，
 // 统一走 TEI 边车（见 D5）。

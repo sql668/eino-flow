@@ -10,6 +10,31 @@ import (
 	"einoflow-backend/internal/repository"
 )
 
+// ListRecent 取最近若干条消息，返回时按时间正序。
+//
+// 实现要点：先按 id 倒序取最近 N 条，再反转成正序——
+// 直接正序 + Limit 拿到的是最早的消息，不是最近的。
+func (r *MessageRepository) ListRecent(
+	ctx context.Context, conversationID uint64, limit int,
+) ([]*model.Message, error) {
+	if limit <= 0 {
+		return []*model.Message{}, nil
+	}
+	var rows []model.Message
+	if err := r.client.DB(ctx).
+		Where("conversation_id = ?", conversationID).
+		Order("id DESC").
+		Limit(limit).
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("查询最近消息失败: %w", err)
+	}
+	messages := make([]*model.Message, 0, len(rows))
+	for i := len(rows) - 1; i >= 0; i-- {
+		messages = append(messages, &rows[i])
+	}
+	return messages, nil
+}
+
 // MessageRepository 是基于 PostgreSQL（GORM）的实现。
 type MessageRepository struct {
 	client *Client
@@ -22,6 +47,12 @@ func NewMessageRepository(client *Client) *MessageRepository {
 
 // Create 追加一条消息。
 func (r *MessageRepository) Create(ctx context.Context, message *model.Message) error {
+	// citations 是 NOT NULL 的 jsonb 列，而 json.Marshal 对 nil 切片输出 null（不是 []），
+	// 直接写入会违反非空约束。规范化的动作放在仓储层：约束由这里兜底，
+	// 调用方漏初始化也不会写失败（与切片时 title_path 是同一个坑）。
+	if message.Citations == nil {
+		message.Citations = []model.MessageCitation{}
+	}
 	if err := r.client.DB(ctx).Create(message).Error; err != nil {
 		return fmt.Errorf("写入消息失败: %w", err)
 	}

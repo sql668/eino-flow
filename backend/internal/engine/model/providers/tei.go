@@ -148,6 +148,12 @@ func (p *teiProvider) NewReranker(cfg Config) (enginemodel.Reranker, error) {
 	}), nil
 }
 
+// NewChatModel 明确不支持：TEI 是文本嵌入/重排推理服务，不做对话。
+func (p *teiProvider) NewChatModel(Config) (enginemodel.ChatModel, error) {
+	return nil, fmt.Errorf("%w: TEI 重排服务不做对话，请选择 Ollama / DeepSeek / OpenAI 兼容接口",
+		enginemodel.ErrChatUnsupported)
+}
+
 // NewEmbedder 明确不支持：TEI 在本项目里专职重排。
 //
 // 返回带指引的错误，比「静默返回空实现」更容易排查。

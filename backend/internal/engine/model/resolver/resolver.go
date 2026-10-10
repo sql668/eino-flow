@@ -74,6 +74,15 @@ func (r *ConfigResolver) Embedder(context.Context, model.ScopeRef) (model.Embedd
 	return r.embedder, nil
 }
 
+// ChatModel 实现 model.Resolver。
+//
+// 配置文件里没有对话模型一节：对话是「按应用选择」的能力，统一走数据库配置。
+// 这里明确返回 ErrNotConfigured，而不是凭空造一个指向默认地址的模型。
+func (r *ConfigResolver) ChatModel(context.Context, model.ScopeRef) (model.ChatModel, error) {
+	return nil, fmt.Errorf("%w: 对话模型需在「模型配置」中设置（配置文件不提供兜底）",
+		model.ErrNotConfigured)
+}
+
 // Reranker 实现 model.Resolver。
 func (r *ConfigResolver) Reranker(context.Context, model.ScopeRef) (model.Reranker, error) {
 	if r.rerankErr != nil {

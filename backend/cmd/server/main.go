@@ -235,6 +235,15 @@ func main() {
 		service.RetrievalDefaults{TopK: cfg.Retrieval.TopK},
 	)
 
+	// 问答：Eino 编排（检索 → 提示 → 对话模型），事件通过 SSE 推送。
+	chatService := service.NewChatService(
+		appRepository,
+		conversationRepository,
+		postgres.NewMessageRepository(client),
+		modelResolver,
+		retrievalService,
+	)
+
 	// 入库是异步的：解析一份百页文档要几分钟，同步等待会挂住请求。
 	ingestCtx, stopIngest := context.WithCancel(ctx)
 	documentService.Start(ingestCtx)
@@ -258,6 +267,7 @@ func main() {
 		Documents:     documentService,
 		Searches:      retrievalService,
 		ModelConfig:   modelConfigService,
+		Chats:         chatService,
 	})
 
 	log.Printf("EinoFlow 后端启动中: env=%s addr=%s", cfg.App.Env, cfg.Server.Addr())

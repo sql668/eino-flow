@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	enginemodel "einoflow-backend/internal/engine/model"
+	"einoflow-backend/internal/engine/model/openai"
 	"einoflow-backend/internal/model"
 )
 
@@ -58,6 +60,18 @@ func (p *deepseekProvider) CredentialFields() []CredentialField {
 func (p *deepseekProvider) Probe(ctx context.Context, cfg Config) (ProbeResult, error) {
 	return probeOpenAIStyleModels(
 		ctx, p.http, cfg.BaseURLOrDefault(p.DefaultBaseURL()), cfg.Credential("api_key"), cfg.ModelName)
+}
+
+// NewChatModel 构造 DeepSeek 对话模型（OpenAI 兼容协议）。
+func (p *deepseekProvider) NewChatModel(cfg Config) (enginemodel.ChatModel, error) {
+	if strings.TrimSpace(cfg.ModelName) == "" {
+		return nil, fmt.Errorf("未指定对话模型名")
+	}
+	return openai.NewChatModel(openai.ChatOptions{
+		BaseURL: cfg.BaseURLOrDefault(p.DefaultBaseURL()),
+		Model:   strings.TrimSpace(cfg.ModelName),
+		APIKey:  cfg.Credential("api_key"),
+	}), nil
 }
 
 // NewEmbedder 明确拒绝：DeepSeek 没有向量化接口。

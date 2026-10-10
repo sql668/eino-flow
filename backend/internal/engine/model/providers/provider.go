@@ -112,6 +112,9 @@ type Provider interface {
 	NewEmbedder(cfg Config) (enginemodel.Embedder, error)
 	// NewReranker 构造重排实现；该厂商不支持重排时返回错误（带可执行的指引）。
 	NewReranker(cfg Config) (enginemodel.Reranker, error)
+	// NewChatModel 构造对话实现（Eino 的 BaseChatModel，可直接进编排图）；
+	// 该厂商不支持对话时返回错误。
+	NewChatModel(cfg Config) (enginemodel.ChatModel, error)
 }
 
 // registry 是内置厂商注册表。key 为厂商标识。

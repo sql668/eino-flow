@@ -32,12 +32,34 @@ type Conversation struct {
 	UpdatedAt time.Time
 }
 
+// MessageCitation 是助手消息引用的一条片段。
+//
+// 只放「展示与回溯」够用的字段：回答里的 [n] 编号、来源文档与页码、最终排序分数。
+// 片段正文不冗余存一份——它就在 document_segments 里，按 SegmentID 取即可。
+type MessageCitation struct {
+	// Index 是提示与回答里的引用编号（从 1 开始）。
+	Index        int      `json:"index"`
+	SegmentID    uint64   `json:"segmentId"`
+	DocumentID   uint64   `json:"documentId"`
+	DocumentName string   `json:"documentName"`
+	Page         int      `json:"page"`
+	TitlePath    []string `json:"titlePath"`
+	// Score 是最终用于排序的分数；RerankScore 单独给出，便于展示两阶段差异。
+	Score       float32  `json:"score"`
+	RerankScore *float32 `json:"rerankScore,omitempty"`
+}
+
 // Message 是会话里的一条消息。
 type Message struct {
 	ID             uint64
 	ConversationID uint64
 	Role           MessageRole
 	Content        string
+	// Citations 只在助手消息上有值：本轮回答引用了哪些片段。
+	// 用 jsonb 存（GORM serializer），与消息一起读写，不需要额外查询。
+	Citations []MessageCitation `gorm:"serializer:json"`
+	// RetrievalRunID 指向 retrieval_runs：可以回看当时的召回与重排过程。
+	RetrievalRunID uint64
 	// TokenCount / LatencyMS / TraceID 服务于后续的可观测能力（V2.0 全链路追踪），
 	// 现在就落库，避免以后改表。
 	TokenCount int
