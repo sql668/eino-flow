@@ -143,10 +143,26 @@ func (r *DatabaseResolver) Effective(
 		}
 		return effective.EffectiveModel, nil
 	case model.ModelTypeLLM:
-		// 对话模型还没有消费方（随 SSE 对话落地），这里明确说清楚，
-		// 而不是回一个空模型让界面显示成「已就绪」。
-		return EffectiveModel{}, fmt.Errorf("%w: 对话模型的调用尚未接入（V0.1 收尾时随流式对话落地）",
-			enginemodel.ErrNotConfigured)
+		// 对话模型照样解析绑定关系：界面要如实显示「配了哪个对话模型」，
+		// 而不能因为它暂时没被调用就装作没配（那样使用者会以为自己的配置没生效）。
+		// 这里只是不构造客户端——对话调用随流式对话落地，届时在此返回实例即可。
+		resolved, err := r.resolve(ctx, scope, model.ModelTypeLLM)
+		if err != nil {
+			return EffectiveModel{}, err
+		}
+		if resolved == nil {
+			return EffectiveModel{}, fmt.Errorf(
+				"%w: 尚未配置对话模型（可在「模型配置」中添加并设为默认）", enginemodel.ErrNotConfigured)
+		}
+		return EffectiveModel{
+			InstanceID:   resolved.instance.ID,
+			Provider:     resolved.provider.Provider,
+			ProviderName: providerLabel(*resolved.provider),
+			ModelName:    resolved.instance.ModelName,
+			ModelType:    resolved.instance.ModelType,
+			BaseURL:      resolved.provider.BaseURL,
+			Scope:        resolved.scope,
+		}, nil
 	default:
 		return EffectiveModel{}, fmt.Errorf("不支持的模型类型 %q", kind)
 	}
@@ -198,7 +214,7 @@ func (r *DatabaseResolver) RerankerFor(
 		EffectiveModel: EffectiveModel{
 			InstanceID:   resolved.instance.ID,
 			Provider:     resolved.provider.Provider,
-			ProviderName: resolved.provider.DisplayName,
+			ProviderName: providerLabel(*resolved.provider),
 			ModelName:    resolved.instance.ModelName,
 			ModelType:    resolved.instance.ModelType,
 			BaseURL:      resolved.provider.BaseURL,
@@ -301,7 +317,7 @@ func (r *DatabaseResolver) EmbedderFor(ctx context.Context, scope enginemodel.Sc
 		EffectiveModel: EffectiveModel{
 			InstanceID:   resolved.instance.ID,
 			Provider:     resolved.provider.Provider,
-			ProviderName: resolved.provider.DisplayName,
+			ProviderName: providerLabel(*resolved.provider),
 			ModelName:    resolved.instance.ModelName,
 			ModelType:    resolved.instance.ModelType,
 			BaseURL:      resolved.provider.BaseURL,
@@ -473,6 +489,20 @@ func (r *DatabaseResolver) Invalidate() {
 	r.mu.Lock()
 	r.cache = make(map[string]cachedModel)
 	r.mu.Unlock()
+}
+
+// providerLabel 返回厂商展示名：与配置页一致，**以代码里的定义为准**。
+//
+// 库里存的 display_name 是历史值：改过名字的老环境会一直显示旧名
+// （实测踩到：界面上仍显示「TEI 边车」）。内置厂商的名称属于代码。
+func providerLabel(record model.ModelProvider) string {
+	if plugin, err := providers.Get(record.Provider); err == nil {
+		return plugin.DisplayName()
+	}
+	if record.DisplayName != "" {
+		return record.DisplayName
+	}
+	return record.Provider
 }
 
 // parseCredentials 把凭证 JSON 解析成字段表。

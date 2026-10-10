@@ -26,8 +26,10 @@ const maxCredentialRunes = 2048
 // 有一条硬性约束：**只回掩码，绝不回明文**。
 // 因此这里没有存放任何原始凭证的字段，视图由服务层组装，不给「顺手带出明文」留口子。
 type ProviderView struct {
-	Provider         string
-	DisplayName      string
+	Provider    string
+	DisplayName string
+	// Description 是一句话说明，仅凭厂商名使用者猜不出用途。
+	Description      string
 	Kinds            []model.ModelType
 	DefaultBaseURL   string
 	BaseURL          string
@@ -70,10 +72,12 @@ type BindingView struct {
 }
 
 // SaveProviderInput 是保存厂商配置的入参。
+//
+// 刻意不含显示名：内置厂商的名称是代码的一部分（与 Dify 的插件一致），
+// 允许改名只会带来「改过了但界面还是旧名」这类困惑，而它并不带来任何能力。
 type SaveProviderInput struct {
-	Provider    string
-	DisplayName string
-	BaseURL     string
+	Provider string
+	BaseURL  string
 	// Credentials 为 nil 表示「不改动已存凭证」；空 map 表示清空。
 	Credentials map[string]string
 	Enabled     *bool
@@ -178,6 +182,7 @@ func (s *ModelConfigService) ListProviders(ctx context.Context) ([]ProviderView,
 		view := ProviderView{
 			Provider:         plugin.ID(),
 			DisplayName:      plugin.DisplayName(),
+			Description:      plugin.Description(),
 			Kinds:            plugin.Kinds(),
 			DefaultBaseURL:   plugin.DefaultBaseURL(),
 			CredentialFields: plugin.CredentialFields(),
@@ -188,9 +193,6 @@ func (s *ModelConfigService) ListProviders(ctx context.Context) ([]ProviderView,
 			view.BaseURL = record.BaseURL
 			view.Enabled = record.Enabled
 			view.UpdatedAt = record.UpdatedAt
-			if record.DisplayName != "" {
-				view.DisplayName = record.DisplayName
-			}
 			if mask, err := s.maskCredentials(record.Credentials); err != nil {
 				return nil, err
 			} else {
@@ -218,7 +220,8 @@ func (s *ModelConfigService) SaveProvider(ctx context.Context, in SaveProviderIn
 	}
 
 	record.BaseURL = strings.TrimSpace(in.BaseURL)
-	record.DisplayName = strings.TrimSpace(in.DisplayName)
+	// 落库的展示名始终与代码一致：让库里也能自解释，同时避免历史值覆盖新名字。
+	record.DisplayName = plugin.DisplayName()
 	if in.Enabled != nil {
 		record.Enabled = *in.Enabled
 	}
@@ -341,10 +344,8 @@ func (s *ModelConfigService) ListModels(ctx context.Context, kind model.ModelTyp
 		}
 		if record, ok := providerByID[instance.ProviderID]; ok {
 			view.Provider = record.Provider
-			view.ProviderName = record.DisplayName
-			if view.ProviderName == "" {
-				view.ProviderName = record.Provider
-			}
+			// 展示名同样以代码为准：库里存的是历史值，可能早于最近一次改名。
+			view.ProviderName = providerDisplayName(record)
 		}
 		if count, err := s.bindings.CountByInstance(ctx, instance.ID); err == nil {
 			view.BindingCount = count
@@ -669,6 +670,20 @@ func (s *ModelConfigService) decryptCredentials(record *model.ModelProvider) (ma
 		return nil, fmt.Errorf("凭证格式不正确: %w", err)
 	}
 	return parsed, nil
+}
+
+// providerDisplayName 返回厂商展示名：**以代码里的定义为准**。
+//
+// 内置厂商的名字属于代码（同 Dify 的插件），已保存的记录只作为兜底：
+// 否则改一次名字，老环境会一直显示旧名（本次就踩到：界面仍显示「TEI 边车」）。
+func providerDisplayName(record *model.ModelProvider) string {
+	if plugin, err := providers.Get(record.Provider); err == nil {
+		return plugin.DisplayName()
+	}
+	if record.DisplayName != "" {
+		return record.DisplayName
+	}
+	return record.Provider
 }
 
 // maskCredentials 生成凭证掩码：取所有非空字段的掩码并排序，拼成一行展示。

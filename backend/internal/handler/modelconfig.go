@@ -46,8 +46,10 @@ func registerModelConfigRoutes(group *route.RouterGroup, config *service.ModelCo
 // providerResponse 是厂商的对外结构。
 // 注意：没有任何存放原始凭证的字段——凭证只以掩码形式出现。
 type providerResponse struct {
-	Provider         string                    `json:"provider"`
-	DisplayName      string                    `json:"displayName"`
+	Provider    string `json:"provider"`
+	DisplayName string `json:"displayName"`
+	// Description 是厂商用途说明，前端在名称下方展示。
+	Description      string                    `json:"description"`
 	Kinds            []string                  `json:"kinds"`
 	DefaultBaseURL   string                    `json:"defaultBaseUrl"`
 	BaseURL          string                    `json:"baseUrl"`
@@ -132,6 +134,7 @@ func newProviderResponse(view service.ProviderView) providerResponse {
 	response := providerResponse{
 		Provider:         view.Provider,
 		DisplayName:      view.DisplayName,
+		Description:      view.Description,
 		Kinds:            kinds,
 		DefaultBaseURL:   view.DefaultBaseURL,
 		BaseURL:          view.BaseURL,
@@ -203,8 +206,7 @@ func (h *modelConfigHandler) listProviders(ctx context.Context, c *app.RequestCo
 }
 
 type saveProviderRequest struct {
-	DisplayName string `json:"displayName"`
-	BaseURL     string `json:"baseUrl"`
+	BaseURL string `json:"baseUrl"`
 	// Credentials 为 null 表示不改动已存凭证；传 {} 表示清空。
 	Credentials map[string]string `json:"credentials"`
 	Enabled     *bool             `json:"enabled"`
@@ -218,7 +220,6 @@ func (h *modelConfigHandler) saveProvider(ctx context.Context, c *app.RequestCon
 	}
 	view, err := h.config.SaveProvider(ctx, service.SaveProviderInput{
 		Provider:    c.Param("provider"),
-		DisplayName: req.DisplayName,
 		BaseURL:     req.BaseURL,
 		Credentials: req.Credentials,
 		Enabled:     req.Enabled,

@@ -12,7 +12,10 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -91,8 +94,12 @@ type ProbeResult struct {
 type Provider interface {
 	// ID 是厂商标识，落库并出现在 URL 里，一旦发布不要再改。
 	ID() string
-	// DisplayName 是厂商默认展示名。
+	// DisplayName 是厂商默认展示名。取「使用者一眼能懂」的说法，
+	// 不出现 sidecar / inference server 这类术语。
 	DisplayName() string
+	// Description 是一句话说明：这个厂商是干什么的、什么时候该用它。
+	// 仅凭名字（如 TEI）使用者猜不出用途，配置页需要这句话。
+	Description() string
 	// Kinds 返回该厂商支持的模型能力类型。
 	Kinds() []model.ModelType
 	// DefaultBaseURL 返回默认服务地址（用户可覆盖）。
@@ -112,6 +119,7 @@ var registry = func() map[string]Provider {
 	all := []Provider{
 		newOllama(),
 		newOpenAICompatible(),
+		newDeepSeek(),
 		newTEI(),
 	}
 	table := make(map[string]Provider, len(all))
@@ -162,6 +170,69 @@ func Supports(provider Provider, kind model.ModelType) bool {
 		}
 	}
 	return false
+}
+
+// probeOpenAIStyleModels 是「OpenAI 风格」厂商的通用探测：
+// GET {base}/models + Bearer 鉴权，返回模型列表。
+//
+// 抽出来是因为 DeepSeek、通义、硅基流动这类厂商的探测方式完全一致，
+// 差别只在默认地址与错误文案——复制一份不会有任何收益，只会多一处要同步改的地方。
+func probeOpenAIStyleModels(
+	ctx context.Context, client *http.Client, baseURL, apiKey, wantModel string,
+) (ProbeResult, error) {
+	return measure(func() (ProbeResult, error) {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)
+		if err != nil {
+			return ProbeResult{}, err
+		}
+		if apiKey != "" {
+			request.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+
+		response, err := client.Do(request)
+		if err != nil {
+			return ProbeResult{}, fmt.Errorf("无法连接（%s）：%w", baseURL, err)
+		}
+		defer func() { _ = response.Body.Close() }()
+
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			return ProbeResult{}, fmt.Errorf("读取响应失败: %w", err)
+		}
+		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+			return ProbeResult{}, fmt.Errorf("凭证被拒绝（HTTP %d），请检查 API Key", response.StatusCode)
+		}
+		if response.StatusCode != http.StatusOK {
+			return ProbeResult{}, fmt.Errorf("接口返回 HTTP %d：%s", response.StatusCode, truncate(string(body), 200))
+		}
+
+		var parsed struct {
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			// 部分兼容端点不实现 /models：地址是通的，只是拿不到列表，不算失败。
+			return ProbeResult{
+				OK:      true,
+				Message: "地址可访问，但该端点未提供模型列表（不影响按模型名调用）",
+			}, nil
+		}
+		if parsed.Error != nil && parsed.Error.Message != "" {
+			return ProbeResult{}, fmt.Errorf("接口报错: %s", parsed.Error.Message)
+		}
+
+		names := make([]string, 0, len(parsed.Data))
+		for _, item := range parsed.Data {
+			if item.ID != "" {
+				names = append(names, item.ID)
+			}
+		}
+		return buildProbeResult("接口连接正常，凭证有效", names, wantModel), nil
+	})
 }
 
 // measure 执行一次探测并补齐耗时，统一各厂商的实现方式。

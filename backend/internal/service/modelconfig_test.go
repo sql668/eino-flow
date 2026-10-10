@@ -365,6 +365,14 @@ func TestSaveProvider_EncryptsAndMasks(t *testing.T) {
 	if !view.Configured || view.BaseURL != "https://api.example.com/v1" {
 		t.Fatalf("视图不符: %+v", view)
 	}
+	// 厂商说明也随视图返回：只给名字，使用者不知道这个厂商是干什么的。
+	if view.Description == "" {
+		t.Error("未带出厂商说明")
+	}
+	// 内置厂商的名称以代码为准（不接受改名），避免界面显示历史旧名。
+	if view.DisplayName != "OpenAI 兼容接口" {
+		t.Errorf("展示名 = %q, 期望使用代码里的名称", view.DisplayName)
+	}
 	if view.CredentialMask == "" || strings.Contains(view.CredentialMask, secret) {
 		t.Fatalf("掩码不符（可能泄漏明文）: %q", view.CredentialMask)
 	}
@@ -522,8 +530,9 @@ func TestCreateModel_Validation(t *testing.T) {
 	if view.ModelName != "bge-m3:latest" {
 		t.Errorf("模型名未去空白: %q", view.ModelName)
 	}
-	if view.ProviderName == "" {
-		t.Error("未带出厂商展示名")
+	// 展示名以代码为准，而不是库里的历史值：改过名字的老环境不该继续显示旧名。
+	if view.ProviderName != "Ollama（本地模型）" {
+		t.Errorf("厂商展示名 = %q, 期望使用代码里的名称", view.ProviderName)
 	}
 }
 

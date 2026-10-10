@@ -23,6 +23,11 @@ var (
 	// ErrDimensionMismatch 表示模型输出维度与已建索引不一致。
 	// 这种情况必须显式失败：维度不匹配的向量写进索引后，检索结果会变成一堆噪声，且极难排查。
 	ErrDimensionMismatch = errors.New("向量维度与索引不一致")
+	// ErrEmbeddingUnsupported 表示该厂商不提供向量化能力。
+	//
+	// 与 ErrNotConfigured 分开：前者要换厂商（例如 DeepSeek 没有 embedding 接口），
+	// 后者只要去配置页填一下。
+	ErrEmbeddingUnsupported = errors.New("该厂商不支持向量化")
 	// ErrRerankUnsupported 表示该厂商不提供重排能力。
 	//
 	// 单独一个错误而不是复用 ErrNotConfigured：两者修法不同——

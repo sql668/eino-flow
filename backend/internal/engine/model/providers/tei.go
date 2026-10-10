@@ -14,7 +14,9 @@ import (
 	"einoflow-backend/internal/model"
 )
 
-// teiProvider 是 HuggingFace text-embeddings-inference（TEI）边车。
+// teiProvider 是 HuggingFace text-embeddings-inference（TEI）推理服务。
+//
+// 对外展示名刻意不叫「边车」：那是部署术语，使用者看到「TEI 边车」并不知道它干什么。
 //
 // 为什么需要它（D5 实测结论）：Ollama 没有 `/rerank` 端点，其 rerank 模型调用即崩溃，
 // 所以重排改用 TEI 边车承载；本项目**只把它用于重排**，向量化仍走 Ollama / OpenAI 兼容接口。
@@ -29,8 +31,13 @@ func newTEI() *teiProvider {
 	return &teiProvider{http: &http.Client{Timeout: 20 * time.Second}}
 }
 
-func (p *teiProvider) ID() string             { return "tei" }
-func (p *teiProvider) DisplayName() string    { return "TEI 边车（重排 / Rerank）" }
+func (p *teiProvider) ID() string          { return "tei" }
+func (p *teiProvider) DisplayName() string { return "TEI 重排服务" }
+
+func (p *teiProvider) Description() string {
+	return "HuggingFace 的文本推理服务，本项目用它承载重排（Ollama 没有重排接口）；" +
+		"由 docker compose --profile rerank up -d tei 启动。"
+}
 func (p *teiProvider) DefaultBaseURL() string { return "http://127.0.0.1:8080" }
 
 func (p *teiProvider) Kinds() []model.ModelType {
@@ -64,7 +71,7 @@ func (p *teiProvider) Probe(ctx context.Context, cfg Config) (ProbeResult, error
 
 		response, err := p.http.Do(request)
 		if err != nil {
-			return ProbeResult{}, fmt.Errorf("无法连接 TEI 边车（%s）：%w", baseURL, err)
+			return ProbeResult{}, fmt.Errorf("无法连接 TEI 重排服务（%s）：%w", baseURL, err)
 		}
 		defer func() { _ = response.Body.Close() }()
 
@@ -73,12 +80,12 @@ func (p *teiProvider) Probe(ctx context.Context, cfg Config) (ProbeResult, error
 			return ProbeResult{}, fmt.Errorf("读取响应失败: %w", err)
 		}
 		if response.StatusCode != http.StatusOK {
-			return ProbeResult{}, fmt.Errorf("边车返回 HTTP %d：%s", response.StatusCode, truncate(string(body), 200))
+			return ProbeResult{}, fmt.Errorf("重排服务返回 HTTP %d：%s", response.StatusCode, truncate(string(body), 200))
 		}
 
 		var parsed teiInfoResponse
 		if err := json.Unmarshal(body, &parsed); err != nil {
-			return ProbeResult{}, fmt.Errorf("解析边车信息失败: %w", err)
+			return ProbeResult{}, fmt.Errorf("解析重排服务信息失败: %w", err)
 		}
 
 		result := ProbeResult{OK: true, Models: []string{}}
@@ -93,14 +100,14 @@ func (p *teiProvider) Probe(ctx context.Context, cfg Config) (ProbeResult, error
 		configured := strings.TrimSpace(cfg.ModelName)
 		switch {
 		case configured == "":
-			result.Message = fmt.Sprintf("边车连接正常，实际加载模型：%s", loaded)
+			result.Message = fmt.Sprintf("连接正常，服务实际加载的模型是：%s", loaded)
 		case sameModelName(configured, parsed.ModelID):
 			result.ModelAvailable = true
-			result.Message = fmt.Sprintf("边车连接正常，已加载模型 %s，与配置一致", loaded)
+			result.Message = fmt.Sprintf("连接正常，服务加载的模型是 %s，与配置一致", loaded)
 		default:
 			// 不一致只提示、不判失败：加载哪个模型由边车启动参数决定，
 			// 使用者可能是故意先配好配置、稍后重启边车。
-			result.Message = fmt.Sprintf("边车连接正常，但实际加载的是 %s，与配置的 %s 不一致（请检查边车启动参数）",
+			result.Message = fmt.Sprintf("连接正常，但服务实际加载的是 %s，与配置的 %s 不一致（请检查重排服务的启动参数）",
 				loaded, configured)
 		}
 		return result, nil
@@ -145,5 +152,5 @@ func (p *teiProvider) NewReranker(cfg Config) (enginemodel.Reranker, error) {
 //
 // 返回带指引的错误，比「静默返回空实现」更容易排查。
 func (p *teiProvider) NewEmbedder(Config) (enginemodel.Embedder, error) {
-	return nil, fmt.Errorf("TEI 边车用于重排，不支持向量化；向量化请选择 Ollama 或 OpenAI 兼容接口")
+	return nil, fmt.Errorf("TEI 重排服务只做重排，不支持向量化；向量化请选择 Ollama 或 OpenAI 兼容接口")
 }

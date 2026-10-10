@@ -27,8 +27,13 @@ func newOllama() *ollamaProvider {
 	return &ollamaProvider{http: &http.Client{Timeout: 20 * time.Second}}
 }
 
-func (p *ollamaProvider) ID() string             { return "ollama" }
-func (p *ollamaProvider) DisplayName() string    { return "Ollama（本地 / 自建）" }
+func (p *ollamaProvider) ID() string          { return "ollama" }
+func (p *ollamaProvider) DisplayName() string { return "Ollama（本地模型）" }
+
+// Description 一句话说明用途：仅凭厂商名使用者猜不出它能做什么、什么时候该选它。
+func (p *ollamaProvider) Description() string {
+	return "本机或自建服务器上的 Ollama，可跑对话与向量化模型；不提供重排接口。"
+}
 func (p *ollamaProvider) DefaultBaseURL() string { return "http://127.0.0.1:11434" }
 
 func (p *ollamaProvider) Kinds() []model.ModelType {

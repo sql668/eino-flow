@@ -298,3 +298,82 @@ func TestRerankerFactories(t *testing.T) {
 		}
 	})
 }
+
+// TestDeepSeek 覆盖 DeepSeek 这类「只有对话能力」的厂商：
+// 能力声明必须准确，否则它会被当成向量化模型使用，直到上传文档才暴错。
+func TestDeepSeek(t *testing.T) {
+	plugin, err := providers.Get("deepseek")
+	if err != nil {
+		t.Fatalf("取厂商失败: %v", err)
+	}
+
+	if plugin.DefaultBaseURL() != "https://api.deepseek.com/v1" {
+		t.Errorf("默认地址 = %s", plugin.DefaultBaseURL())
+	}
+	kinds := plugin.Kinds()
+	if len(kinds) != 1 || kinds[0] != model.ModelTypeLLM {
+		t.Fatalf("能力 = %v, 期望只有 llm（DeepSeek 没有向量化与重排接口）", kinds)
+	}
+	if !providers.Supports(plugin, model.ModelTypeLLM) {
+		t.Error("应支持对话")
+	}
+
+	// 两个工厂都要给出「不支持」而不是「未配置」：前者的修法是换厂商。
+	if _, err := plugin.NewEmbedder(providers.Config{ModelName: "deepseek-chat"}); !errors.Is(err, enginemodel.ErrEmbeddingUnsupported) {
+		t.Errorf("向量化错误 = %v, 期望 ErrEmbeddingUnsupported", err)
+	}
+	if _, err := plugin.NewReranker(providers.Config{ModelName: "deepseek-chat"}); !errors.Is(err, enginemodel.ErrRerankUnsupported) {
+		t.Errorf("重排错误 = %v, 期望 ErrRerankUnsupported", err)
+	}
+
+	ctx := context.Background()
+	t.Run("凭证有效", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/models" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.Header.Get("Authorization") != "Bearer sk-deepseek" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"deepseek-chat"},{"id":"deepseek-reasoner"}]}`))
+		}))
+		defer server.Close()
+
+		result, err := plugin.Probe(ctx, providers.Config{
+			BaseURL: server.URL + "/v1", ModelName: "deepseek-chat",
+			Credentials: map[string]string{"api_key": "sk-deepseek"},
+		})
+		if err != nil {
+			t.Fatalf("探测失败: %v", err)
+		}
+		if !result.ModelAvailable || len(result.Models) != 2 {
+			t.Fatalf("结果不符: %+v", result)
+		}
+	})
+
+	t.Run("密钥无效", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"Authentication Fails"}}`))
+		}))
+		defer server.Close()
+
+		_, err := plugin.Probe(ctx, providers.Config{
+			BaseURL: server.URL, Credentials: map[string]string{"api_key": "bad"},
+		})
+		if err == nil || !strings.Contains(err.Error(), "凭证被拒绝") {
+			t.Fatalf("错误 = %v, 期望提示凭证被拒绝", err)
+		}
+	})
+}
+
+// TestRegistryContainsBuiltins 防止「加了厂商但忘了注册」这类低级问题。
+func TestRegistryContainsBuiltins(t *testing.T) {
+	for _, id := range []string{"ollama", "openai_compatible", "deepseek", "tei"} {
+		if _, err := providers.Get(id); err != nil {
+			t.Errorf("内置厂商 %s 未注册: %v", id, err)
+		}
+	}
+}

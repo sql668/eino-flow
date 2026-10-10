@@ -466,13 +466,43 @@ func TestDatabaseResolver_EffectiveByKind(t *testing.T) {
 		t.Errorf("类型 = %s, 期望 rerank", effective.ModelType)
 	}
 
-	// 对话模型没有消费方：必须明确报「未接入」，而不是回一个空模型让界面显示成已就绪。
-	_, err = instance.Effective(ctx, model.ModelTypeLLM, enginemodel.ScopeRef{})
-	if err == nil || !strings.Contains(err.Error(), "尚未接入") {
-		t.Fatalf("错误 = %v, 期望提示对话模型尚未接入", err)
+	// 对话模型可以正常解析（界面要显示「配了哪个」），见 TestDatabaseResolver_EffectiveLLM。
+	if _, err := instance.Effective(ctx, model.ModelTypeLLM, enginemodel.ScopeRef{}); !errors.Is(err, enginemodel.ErrNotConfigured) {
+		t.Fatalf("未绑定对话模型时的错误 = %v, 期望 ErrNotConfigured", err)
 	}
 
 	if _, err := instance.Effective(ctx, model.ModelType("speech"), enginemodel.ScopeRef{}); err == nil {
 		t.Fatal("未知类型应报错")
+	}
+}
+
+// TestDatabaseResolver_EffectiveLLM 覆盖对话模型的解析。
+//
+// 它暂时没有消费方，但界面要如实显示「配了哪个」——
+// 曾出现「配了对话模型，卡片却显示未启用」的误导，根因就是这里一律回了「未接入」。
+func TestDatabaseResolver_EffectiveLLM(t *testing.T) {
+	data := newStore()
+	providerID := data.addProvider("deepseek", "https://api.deepseek.com/v1", true)
+	instanceID := data.addInstance(providerID, "deepseek-chat", model.ModelTypeLLM, true)
+	data.bind(model.ModelScopeGlobal, 0, 0, model.ModelTypeLLM, instanceID)
+
+	instance := newResolver(t, data, nil)
+	effective, err := instance.Effective(context.Background(), model.ModelTypeLLM, enginemodel.ScopeRef{})
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if effective.ModelName != "deepseek-chat" || effective.Scope != model.ModelScopeGlobal {
+		t.Fatalf("结果不符: %+v", effective)
+	}
+	// 厂商展示名以代码为准。
+	if effective.ProviderName != "DeepSeek" {
+		t.Errorf("厂商展示名 = %q, 期望 DeepSeek", effective.ProviderName)
+	}
+
+	// 没绑定对话模型时仍然是 ErrNotConfigured：界面据此显示「未配置」。
+	empty := newStore()
+	if _, err := newResolver(t, empty, nil).Effective(
+		context.Background(), model.ModelTypeLLM, enginemodel.ScopeRef{}); !errors.Is(err, enginemodel.ErrNotConfigured) {
+		t.Fatalf("错误 = %v, 期望 ErrNotConfigured", err)
 	}
 }
