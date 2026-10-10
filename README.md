@@ -64,6 +64,23 @@ printf 'EINOFLOW_SECRET_KEY=%s\n' "$(openssl rand -base64 32)" >> .env
 
 注意：换掉这个密钥，已保存的厂商凭证将无法解密，需要在界面上重新填写。
 
+### 重排（可选，两阶段检索的第二阶段）
+
+检索默认是「向量召回 20 条 → 重排取前 5 条」。重排由 TEI 边车承载
+（Ollama 不提供 rerank 接口，见 D5）：
+
+```bash
+docker compose --profile rerank up -d tei   # 首次会先下载约 2GB 的重排模型
+
+# 本地开发（Apple Silicon）注意：TEI 的 CPU 版镜像只有 linux/amd64，
+# 容器里没有 AVX2，实测重排极慢（单条候选超过 120 秒）。
+# 因此本地 .env 默认 EINOFLOW_RETRIEVAL_RERANK=off；
+# 部署到 x86_64 服务器后改成 auto 即为原生执行。
+```
+
+请求里可以用 `"rerank": true / false` 单独控制某一次检索是否重排，
+返回里同时带 `vectorScore` 与 `rerankScore`，便于对比两个阶段的效果。
+
 ## 本地依赖说明
 
 | 组件 | 地址 | 说明 |
