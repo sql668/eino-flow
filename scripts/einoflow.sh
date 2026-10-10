@@ -91,8 +91,17 @@ kill_by_pidfile() {
 }
 
 # 端口是否被占用（用于启动前自检，避免启动失败却看不出原因）。
+#
+# 用 bash 内建的 /dev/tcp 而不是 nc：nc 在 macOS / 各 Linux 发行版上的实现与
+# 是否预装都不一样（Alpine 默认没有），开源后别人跑脚本会莫名其妙地「检测不出来」。
 port_in_use() {
-  nc -z 127.0.0.1 "$1" >/dev/null 2>&1
+  local port="$1"
+  if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+    exec 3>&- 3<&- 2>/dev/null || true
+    return 0
+  fi
+  # 少数环境禁用了 /dev/tcp，退回 nc（有就用，没有就当作端口空闲）。
+  command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "${port}" >/dev/null 2>&1
 }
 
 # 轮询 HTTP 直到就绪。
@@ -161,6 +170,25 @@ start_backend() {
   wait_http "http://127.0.0.1:${EINOFLOW_SERVER_PORT:-8888}/healthz" "后端"
 }
 
+# 重排是可选组件（见 deploy/rerank-local/README.md）：
+# 环境没准备好就跳过并给出提示，不让「没装 Python」变成启动失败。
+start_rerank() {
+  local script="$ROOT_DIR/deploy/rerank-local/run.sh"
+  if [ ! -x "$script" ]; then
+    return 0
+  fi
+  if [ ! -x "$ROOT_DIR/deploy/rerank-local/.venv/bin/python" ]; then
+    warn "未准备本机重排服务，跳过（需要时执行 deploy/rerank-local/bootstrap.sh）"
+    return 0
+  fi
+  info "启动本机重排服务（可用 RERANK_DISABLED=1 跳过）"
+  if [ "${RERANK_DISABLED:-0}" = "1" ]; then
+    warn "RERANK_DISABLED=1，跳过重排服务"
+    return 0
+  fi
+  "$script" start || warn "重排服务启动失败，检索仍可用（只是不做重排）"
+}
+
 start_web() {
   if is_running web; then
     warn "前端已在运行 (pid $(cat "$(pid_file web)"))，跳过"
@@ -227,6 +255,7 @@ cmd_start() {
 
   start_deps
   start_backend
+  start_rerank
   start_web
   # 隧道是可选的：默认只做本地启动，需要公网访问时加 --tunnel。
   if [ "$with_tunnel" = "1" ]; then
@@ -236,11 +265,17 @@ cmd_start() {
   cmd_status
 }
 
+cmd_stop_rerank() {
+  local script="$ROOT_DIR/deploy/rerank-local/run.sh"
+  [ -x "$script" ] && "$script" stop >/dev/null 2>&1 || true
+}
+
 cmd_stop() {
   load_env
   stop_tunnel
   kill_by_pidfile web
   kill_by_pidfile backend
+  cmd_stop_rerank
   info "暂停依赖容器（数据保留在 volume 中）"
   docker compose stop
   ok "已全部停止"
@@ -279,6 +314,12 @@ cmd_status() {
   docker compose ps --format 'table {{.Name}}\t{{.Status}}' 2>/dev/null || warn "docker 不可用"
 
   echo
+  echo "${C_B}=== 可选组件 ===${C_0}"
+  local rerank_script="$ROOT_DIR/deploy/rerank-local/run.sh"
+  if [ -x "$rerank_script" ]; then
+    "$rerank_script" status 2>/dev/null | sed 's/^/  /' || warn "重排服务状态未知"
+  fi
+
   echo "${C_B}=== 本地进程 ===${C_0}"
   local name
   for name in backend web; do

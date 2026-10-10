@@ -66,20 +66,21 @@ printf 'EINOFLOW_SECRET_KEY=%s\n' "$(openssl rand -base64 32)" >> .env
 
 ### 重排（可选，两阶段检索的第二阶段）
 
-检索默认是「向量召回 20 条 → 重排取前 5 条」。重排由 TEI 边车承载
-（Ollama 不提供 rerank 接口，见 D5）：
+检索默认是「向量召回 20 条 → 重排取前 5 条」。重排需要一个 cross-encoder 模型
+（Ollama 不提供 rerank 接口，见 D5）。**两条路协议一致，按你的机器选一条**：
 
-```bash
-docker compose --profile rerank up -d tei   # 首次会先下载约 2GB 的重排模型
+| 你的环境 | 怎么做 | 说明 |
+| --- | --- | --- |
+| Linux x86_64（含云服务器） | `docker compose --profile rerank up -d tei` | 官方 TEI 镜像，原生执行，无需装 Python |
+| macOS（Apple Silicon / Intel） | `deploy/rerank-local/bootstrap.sh && deploy/rerank-local/run.sh start` | PyTorch 直接调用本机 GPU（Metal / CUDA），也可退到 CPU |
+| 都不想装 | 不启动，并设 `EINOFLOW_RETRIEVAL_RERANK=off` | 检索照常可用，只是少一层精排 |
 
-# 本地开发（Apple Silicon）注意：TEI 的 CPU 版镜像只有 linux/amd64，
-# 容器里没有 AVX2，实测重排极慢（单条候选超过 120 秒）。
-# 因此本地 .env 默认 EINOFLOW_RETRIEVAL_RERANK=off；
-# 部署到 x86_64 服务器后改成 auto 即为原生执行。
-```
+**Apple Silicon 上不要用容器里的 TEI**：该镜像只发布 linux/amd64，容器里也拿不到 AVX2，
+只能走标量内核。实测同一模型、同样 2 条候选：模拟环境 **216 秒**，本机 MPS 服务 **0.52 秒**。
 
-请求里可以用 `"rerank": true / false` 单独控制某一次检索是否重排，
-返回里同时带 `vectorScore` 与 `rerankScore`，便于对比两个阶段的效果。
+另外重排开销与候选数近似线性，机器弱就调小 `retrieval.candidate_top_k`（默认 20），
+或换更小的模型（如 `BAAI/bge-reranker-base`）。请求里可以用 `"rerank": true / false`
+单独控制某一次检索是否重排，返回同时带 `vectorScore` 与 `rerankScore` 便于对比两阶段效果。
 
 ## 本地依赖说明
 

@@ -186,7 +186,11 @@ services:
     container_name: einoflow-tei-model
     profiles: ["rerank"]
     environment:
-      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      # 留空表示自动探测：先试 huggingface.co，不可达再用 hf-mirror。
+      # 写成死值会让另一部分用户（国外 / 国内）多踩一次坑，所以交给运行时判断。
+      HF_ENDPOINT: ${HF_ENDPOINT:-}
+      # 镜像站不代理 HuggingFace 新的 Xet 存储（会返回 401），关闭后走传统下载。
+      HF_HUB_DISABLE_XET: "1"
       TEI_MODEL_ID: ${TEI_MODEL_ID:-BAAI/bge-reranker-v2-m3}
       # 默认用 PyPI 官方源；国内服务器上可覆盖成本地镜像。
       PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
@@ -195,6 +199,14 @@ services:
       - |
         set -e
         pip install --quiet --no-cache-dir huggingface_hub
+        if [ -z "$${HF_ENDPOINT}" ]; then
+          if curl -fsS -m 8 -o /dev/null https://huggingface.co/api/models 2>/dev/null; then
+            export HF_ENDPOINT=https://huggingface.co
+          else
+            export HF_ENDPOINT=https://hf-mirror.com
+          fi
+        fi
+        echo "HuggingFace 端点: $${HF_ENDPOINT}"
         python -c "
         import os
         from huggingface_hub import snapshot_download
@@ -205,7 +217,7 @@ services:
         "
     volumes:
       # 与边车共用同一个宿主目录：下载完边车直接按本地路径加载，不需要再搬运。
-      - ${TEI_MODEL_DIR:-./deploy/tei/models}:/data/models
+      - ${TEI_MODEL_DIR:-./deploy/models}:/data/models
 
   # 重排边车（TEI = HuggingFace text-embeddings-inference）。
   #
@@ -221,7 +233,10 @@ services:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.6
     container_name: einoflow-tei
     profiles: ["rerank"]
-    platform: linux/amd64
+    # 默认 linux/amd64：该镜像只发布 amd64。在 x86_64 服务器上这是原生的，
+    # 在 Apple Silicon 上会走模拟（很慢，本机请用 deploy/rerank-local 的原生服务）。
+    # 需要时可用 TEI_PLATFORM 覆盖（例如 arm64 镜像出现后）。
+    platform: ${TEI_PLATFORM:-linux/amd64}
     depends_on:
       tei-model:
         # 等下载器成功退出再启动：模型没就绪的情况下 TEI 会直接崩溃重启。
@@ -236,7 +251,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ${TEI_MODEL_DIR:-./deploy/tei/models}:/data/models
+      - ${TEI_MODEL_DIR:-./deploy/models}:/data/models
     healthcheck:
       # 首次启动要把 2GB 级模型读进内存，start_period 给得比较宽松。
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/info || exit 1"]
