@@ -52,7 +52,7 @@ V0.1 的目标是「表单式配置跑通：创建应用 → 上传知识库 →
 | 数据访问分层 | ✅ | `internal/repository` | 接口在 repository，GORM 仅在 `repository/postgres` |
 | 事务支持 | ✅ | `internal/repository/tx.go` | `TxManager` + context 透传，跨仓储事务无需传参 |
 | 对象存储 | ✅ | `internal/repository/minio` | S3 兼容协议，启动自动建 bucket |
-| 健康检查 | ✅ | `internal/handler/health.go` | `/healthz` 不查依赖；`/readyz` 查真实依赖 |
+| 健康检查 | ✅ | `internal/handler/health.go` | `/healthz` 不查依赖；`/readyz` 逐项探 PostgreSQL / MinIO / Milvus，失败一次列全 |
 
 ### 3.3 业务 API
 

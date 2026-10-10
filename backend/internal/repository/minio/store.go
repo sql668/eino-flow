@@ -120,6 +120,9 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// Name 实现 repository.Dependency。
+func (s *Store) Name() string { return "MinIO" }
+
 // Ping 探测对象存储连通性，供就绪检查使用。
 func (s *Store) Ping(ctx context.Context) error {
 	if _, err := s.client.BucketExists(ctx, s.bucket); err != nil {

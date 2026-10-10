@@ -75,7 +75,6 @@ func main() {
 	segmentRepository := postgres.NewSegmentRepository(client)
 	retrievalRepository := postgres.NewRetrievalRepository(client)
 
-	healthService := service.NewHealthService(postgres.NewHealthRepository(client))
 	appService := service.NewAppService(appRepository)
 	datasetService := service.NewDatasetService(datasetRepository)
 	conversationService := service.NewConversationService(
@@ -148,6 +147,14 @@ func main() {
 	}
 	log.Printf("向量化模型就绪: %s（%d 维），向量集合: %s",
 		embedder.Name(), embedder.Dimension(), cfg.Milvus.Collection)
+
+	// 就绪检查覆盖全部外部依赖：RAG 链路同时依赖数据库、对象存储与向量库，
+	// 只探数据库会出现「/readyz 正常但上传文档必失败」的误导性绿灯。
+	healthService := service.NewHealthService(
+		postgres.NewHealthRepository(client),
+		objectStore,
+		vectorStore,
+	)
 
 	pipeline := rag.NewPipeline(rag.Deps{
 		Storage:   objectStore,

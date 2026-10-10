@@ -373,6 +373,20 @@ func (s *Store) Close(ctx context.Context) error {
 	return s.client.Close(ctx)
 }
 
+// Name 实现 repository.Dependency。
+func (s *Store) Name() string { return "Milvus" }
+
+// Ping 探测向量库连通性，供就绪检查使用。
+//
+// 用 ListDatabase 而不是查集合：集合不存在也是「连得上」，不该被判成不可用。
+// 就绪探针要回答的是「服务能不能用」，不是「数据准备好没有」。
+func (s *Store) Ping(ctx context.Context) error {
+	if _, err := s.client.ListDatabase(ctx, milvusclient.NewListDatabaseOption()); err != nil {
+		return fmt.Errorf("向量库不可用: %w", err)
+	}
+	return nil
+}
+
 // DropCollection 删除整个集合。
 //
 // 刻意不出现在 repository.VectorStore 里：删集合是运维动作（换 embedding 模型后重建索引、

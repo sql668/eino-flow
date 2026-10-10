@@ -12,6 +12,9 @@ func NewHealthRepository(client *Client) *HealthRepository {
 	return &HealthRepository{client: client}
 }
 
+// Name 实现 repository.Dependency。
+func (r *HealthRepository) Name() string { return "PostgreSQL" }
+
 // Ping 检查数据库连通性。
 func (r *HealthRepository) Ping(ctx context.Context) error {
 	sqlDB, err := r.client.SQL()
