@@ -1,8 +1,11 @@
+import Link from "next/link";
+
 import { HealthCheck } from "@/components/health-check";
 
 /**
  * 首页。
- * V0.1 阶段用于确认前后端骨架已连通，后续替换为应用列表入口。
+ * V0.1 阶段用于确认前后端骨架已连通，并提供已落地页面的入口；
+ * 后续替换为应用列表入口。
  */
 export default function HomePage() {
   return (
@@ -25,6 +28,21 @@ export default function HomePage() {
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-neutral-500">后端连通性</h2>
         <HealthCheck />
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-medium text-neutral-500">功能入口</h2>
+        <div className="flex flex-col gap-2">
+          <Link
+            href="/settings/models"
+            className="rounded-md border border-neutral-200 bg-white px-4 py-3 text-sm shadow-sm transition-colors hover:border-neutral-400"
+          >
+            <span className="font-medium text-neutral-900">模型配置</span>
+            <span className="ml-2 text-neutral-500">
+              配置厂商凭证、添加模型、设置默认模型
+            </span>
+          </Link>
+        </div>
       </section>
     </main>
   );
