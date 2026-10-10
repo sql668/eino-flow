@@ -90,8 +90,8 @@ export const modelApi = {
       query: { scope, modelType, appId, datasetId },
     }),
 
-  effective: (appId?: number, datasetId?: number) =>
+  effective: (kind: ModelKind, appId?: number, datasetId?: number) =>
     http.get<EffectiveModelInfo>(`${base}/effective`, {
-      query: { appId, datasetId },
+      query: { type: kind, appId, datasetId },
     }),
 };

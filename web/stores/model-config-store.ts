@@ -32,7 +32,10 @@ interface ModelConfigState {
   providers: ModelProviderInfo[];
   models: ModelInstanceInfo[];
   bindings: ModelBindingInfo[];
+  /** 当前生效的向量化模型 */
   effective: EffectiveModelInfo | null;
+  /** 当前生效的重排模型（未配置时为 null） */
+  effectiveRerank: EffectiveModelInfo | null;
   /** 首次加载中 */
   loading: boolean;
   /** 正在进行的操作标识（如 "provider:ollama"），用于按钮禁用 */
@@ -49,6 +52,7 @@ interface ModelConfigState {
   setModelEnabled: (id: number, enabled: boolean) => Promise<boolean>;
   deleteModel: (id: number) => Promise<boolean>;
   testModel: (id: number) => Promise<ProbeResultInfo | null>;
+  /** 设为全局默认；embedding 与 rerank 共用同一条绑定接口 */
   bindGlobal: (modelType: ModelKind, instanceId: number) => Promise<boolean>;
   unbind: (modelType: ModelKind) => Promise<boolean>;
   clearMessages: () => void;
@@ -64,6 +68,7 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
   models: [],
   bindings: [],
   effective: null,
+  effectiveRerank: null,
   loading: false,
   pending: "",
   error: "",
@@ -72,14 +77,16 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
   loadAll: async () => {
     set({ loading: true, error: "" });
     try {
-      // 三个查询互相独立，并发发出，减少首屏等待。
-      const [providers, models, bindings, effective] = await Promise.all([
+      // 查询互相独立，并发发出，减少首屏等待。
+      // effective 分开取 embedding / rerank：两者可以由不同厂商提供，来源也可能不同。
+      const [providers, models, bindings, effective, effectiveRerank] = await Promise.all([
         modelApi.listProviders(),
         modelApi.listModels(),
         modelApi.listBindings("global"),
-        modelApi.effective(),
+        modelApi.effective("embedding"),
+        modelApi.effective("rerank").catch(() => null), // 未配置重排时接口会报错，属正常状态
       ]);
-      set({ providers, models, bindings, effective, loading: false });
+      set({ providers, models, bindings, effective, effectiveRerank, loading: false });
     } catch (error) {
       set({ loading: false, error: describeError(error) });
     }
