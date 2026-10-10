@@ -1,5 +1,7 @@
 import type { ButtonHTMLAttributes } from "react";
 
+import { CONTROL_HEIGHT } from "@/components/ui/field";
+
 // 极简按钮原语。
 // 项目尚未引入 shadcn/ui，但「样式散落在每个按钮上」是明确要避免的：
 // 后续任何页面都要用按钮，抽在这里之后替换设计体系只需改一个文件。
@@ -34,7 +36,7 @@ export function Button({
     <button
       {...rest}
       disabled={disabled || busy}
-      className={`inline-flex items-center justify-center gap-1 rounded-md px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed ${variants[variant]} ${className}`}
+      className={`inline-flex ${CONTROL_HEIGHT} items-center justify-center gap-1 rounded-md px-3 text-sm transition-colors disabled:cursor-not-allowed ${variants[variant]} ${className}`}
     >
       {busy ? "处理中…" : children}
     </button>

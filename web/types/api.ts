@@ -94,6 +94,8 @@ export interface CredentialField {
 export interface ModelProviderInfo {
   provider: string;
   displayName: string;
+  /** 一句话说明该厂商的用途 */
+  description: string;
   kinds: ModelKind[];
   defaultBaseUrl: string;
   /** 用户配置的地址；为空表示用默认值 */

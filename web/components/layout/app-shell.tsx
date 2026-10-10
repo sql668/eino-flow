@@ -65,8 +65,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
 
   return (
-    <div className="flex min-h-screen bg-neutral-50 text-neutral-900">
-      <aside className="flex w-[228px] shrink-0 flex-col border-r border-neutral-200 bg-white">
+    // h-full + overflow-hidden：外壳自身不滚动，滚动交给内部明确指定的区域。
+    // 侧栏只在内容超高时滚动（导航项多了才会），主内容区由页面各自决定。
+    <div className="flex h-full overflow-hidden bg-neutral-50 text-neutral-900">
+      <aside className="flex w-[228px] shrink-0 flex-col overflow-y-auto border-r border-neutral-200 bg-white">
         <div className="flex h-14 items-center px-5">
           <Link href="/" className="text-lg font-semibold tracking-tight">
             EinoFlow
@@ -114,7 +116,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1">{children}</main>
+      <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">{children}</main>
     </div>
   );
 }

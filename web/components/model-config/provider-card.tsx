@@ -55,6 +55,14 @@ export function ProviderCard({
   const [modelProbes, setModelProbes] = useState<Record<number, ProbeResultInfo>>({});
 
   const busy = pending === `provider:${provider.provider}`;
+  // 按当前选中的能力给示例，比固定写 bge-m3:latest 更不容易误导
+  // （重排模型填成 bge-m3 是很容易犯的错）。
+  const modelNamePlaceholder =
+    newModel.kind === "rerank"
+      ? "BAAI/bge-reranker-v2-m3"
+      : newModel.kind === "llm"
+        ? "qwen3:8b"
+        : "bge-m3:latest";
   const credentialPayload = () => {
     const filled = Object.fromEntries(
       Object.entries(credentials).filter(([, value]) => value.trim() !== ""),
@@ -72,7 +80,7 @@ export function ProviderCard({
           {provider.displayName.slice(0, 1)}
         </div>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold text-neutral-900">{provider.displayName}</h3>
             {provider.configured ? (
@@ -86,6 +94,9 @@ export function ProviderCard({
               </span>
             )}
           </div>
+          {provider.description ? (
+            <p className="text-xs leading-5 text-neutral-500">{provider.description}</p>
+          ) : null}
           <div className="flex flex-wrap gap-1.5">
             {provider.kinds.map((kind) => (
               <span
@@ -127,7 +138,7 @@ export function ProviderCard({
 
       {editing ? (
         <div className="flex flex-col gap-3 border-t border-neutral-100 bg-neutral-50/60 px-4 py-4">
-          <Field label="服务地址" hint={`留空使用默认地址：${provider.defaultBaseUrl}`}>
+          <Field label="服务地址" hint={`留空则使用默认地址 ${provider.defaultBaseUrl}`}>
             <Input
               value={baseUrl}
               onChange={(event) => setBaseUrl(event.target.value)}
@@ -140,11 +151,8 @@ export function ProviderCard({
               key={field.key}
               label={field.label}
               required={field.required}
-              hint={
-                provider.credentialMask
-                  ? `已保存：${provider.credentialMask}（留空表示不修改）`
-                  : "凭证以 AES-256-GCM 加密存储，接口只回掩码"
-              }
+              hint="凭证以 AES-256-GCM 加密存储，接口与页面都只回掩码；留空表示不修改已保存的值。"
+              help={provider.credentialMask ? `已保存：${provider.credentialMask}` : undefined}
             >
               <Input
                 type={field.secret ? "password" : "text"}
@@ -259,7 +267,7 @@ export function ProviderCard({
                       >
                         测试
                       </Button>
-                      {model.modelType === "embedding" || model.modelType === "rerank" ? (
+                      {(
                         isDefault ? (
                           <Button
                             busy={pending === `bind:${model.modelType}`}
@@ -276,13 +284,6 @@ export function ProviderCard({
                             设为默认
                           </Button>
                         )
-                      ) : (
-                        <span
-                          className="text-[11px] text-neutral-400"
-                          title="对话模型还没有消费方（随流式对话落地）"
-                        >
-                          暂不可设为默认
-                        </span>
                       )}
                       <Button
                         busy={pending === `model:${model.id}`}
@@ -309,7 +310,9 @@ export function ProviderCard({
           )}
 
           {provider.configured ? (
-            <div className="flex flex-wrap items-end gap-2 rounded-lg bg-neutral-50 px-3 py-3">
+            // 单行排列：标签在控件上方、控件等高，因此「添加模型」按钮与三个输入框天然对齐。
+            // 说明文字走标签旁的悬浮图标，不占额外行高（见 components/ui/field.tsx）。
+            <div className="flex flex-wrap items-end gap-3 rounded-lg bg-neutral-50 px-3 py-3">
               <div className="w-32">
                 <Field label="能力类型">
                   <Select
@@ -327,18 +330,18 @@ export function ProviderCard({
                 </Field>
               </div>
               <div className="min-w-48 flex-1">
-                <Field label="模型名" required hint="与服务端一致，如 bge-m3:latest">
+                <Field label="模型名" required hint="要和对方服务里的名字完全一致，区分大小写。">
                   <Input
                     value={newModel.name}
                     onChange={(event) =>
                       setNewModel((prev) => ({ ...prev, name: event.target.value }))
                     }
-                    placeholder="bge-m3:latest"
+                    placeholder={modelNamePlaceholder}
                   />
                 </Field>
               </div>
               <div className="min-w-40 flex-1">
-                <Field label="显示名（可选）">
+                <Field label="显示名" hint="留空则界面直接显示模型名。">
                   <Input
                     value={newModel.display}
                     onChange={(event) =>
@@ -348,24 +351,28 @@ export function ProviderCard({
                   />
                 </Field>
               </div>
-              <Button
-                variant="primary"
-                busy={pending === "model:create"}
-                disabled={newModel.name.trim() === ""}
-                onClick={async () => {
-                  const ok = await createModel({
-                    provider: provider.provider,
-                    modelName: newModel.name,
-                    modelType: newModel.kind,
-                    displayName: newModel.display,
-                  });
-                  if (ok) {
-                    setNewModel((prev) => ({ ...prev, name: "", display: "" }));
-                  }
-                }}
-              >
-                添加模型
-              </Button>
+              {/* 空标签占位：与 Field 的「标签行 + 间距」等高，保证按钮和输入框在同一条基线 */}
+              <div className="flex flex-col gap-1.5">
+                <span className="h-4" aria-hidden="true" />
+                <Button
+                  variant="primary"
+                  busy={pending === "model:create"}
+                  disabled={newModel.name.trim() === ""}
+                  onClick={async () => {
+                    const ok = await createModel({
+                      provider: provider.provider,
+                      modelName: newModel.name,
+                      modelType: newModel.kind,
+                      displayName: newModel.display,
+                    });
+                    if (ok) {
+                      setNewModel((prev) => ({ ...prev, name: "", display: "" }));
+                    }
+                  }}
+                >
+                  添加模型
+                </Button>
+              </div>
             </div>
           ) : null}
         </div>

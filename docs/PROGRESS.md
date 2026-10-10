@@ -86,7 +86,7 @@ RAG 全链路（解析 → 切片 → 向量化 → 两阶段检索 → 溯源�
 | 模块 | 状态 | 位置 | 说明 |
 | --- | --- | --- | --- |
 | 凭证加密 | ✅ | `internal/security` | AES-256-GCM；密钥只从环境变量注入；接口与前端只接触掩码 |
-| 厂商注册表（内置厂商） | ✅ | `engine/model/providers` | ollama / openai_compatible / tei；声明凭证字段与能力；含连通性探测 |
+| 厂商注册表（内置厂商） | ✅ | `engine/model/providers` | ollama / openai_compatible / deepseek / tei；声明凭证字段与能力；含连通性探测 |
 | OpenAI 兼容向量化 | ✅ | `engine/model/openai` | `/v1/embeddings`，按 index 还原顺序，维度一致性校验 |
 | 数据库驱动模型解析 | ✅ | `engine/model/resolver/database.go` | 知识库 > 应用 > 全局 三级覆盖 + 配置兜底 + 缓存与写后失效 |
 | 模型配置 API | ✅ | `handler/modelconfig.go` | 厂商 4 条 / 模型 5 条 / 绑定 4 条，共 13 条路由 |
@@ -95,8 +95,8 @@ RAG 全链路（解析 → 切片 → 向量化 → 两阶段检索 → 溯源�
 | 重排边车（TEI） | ✅ | `docker-compose.yml`（profile `rerank`） | 一次性下载器 + 本地路径加载（绕开镜像站无 ETag 的问题） |
 | 两阶段检索 | ✅ | `engine/rag/retriever.go` | 召回 candidateTopK → 重排 → 取 topK；可逐请求开关；不静默降级 |
 | 两阶段留痕 | ✅ | `retrieval_runs` / `retrieval_hits` | vector 阶段记全部候选、rerank 阶段记最终结果与两个分数 |
-| 模型配置页（前端） | ✅ | `web/app/(console)/settings/models` | 对齐 Dify「模型供应商」：已配置 / 待配置 / 显示模型折叠区 |
-| 控制台外壳（前端） | ✅ | `web/components/layout` | 全局导航 + 设置二级导航，三栏结构对齐 Dify |
+| 模型配置页（前端） | ✅ | `web/app/(console)/settings/models` | 对齐 Dify「模型供应商」：已配置 / 待配置 / 显示模型折叠区；对话模型也可设默认并如实显示 |
+| 控制台外壳（前端） | ✅ | `web/components/layout` | 全局导航 + 设置二级导航，三栏结构对齐 Dify；**只有内容区滚动**（见 web/AGENTS.md 第 4 节） |
 | **LLM 调用** | ⬜ | — | 厂商已声明 llm 能力，实现随 SSE 对话一起落地 |
 | **Eino 内核接入** | ⬜ | `internal/engine` | **当前 RAG 直连 MinerU / Ollama，尚未经过 Eino 编排** |
 | **流式对话接口（SSE）** | ⬜ | — | 未开始 |

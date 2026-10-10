@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect } from "react";
 
+import { PageContainer } from "@/components/layout/page-container";
 import { HealthCheck } from "@/components/health-check";
 import { useModelConfigStore } from "@/stores/model-config-store";
 
@@ -50,7 +51,7 @@ export default function HomePage() {
   }, [loadAll]);
 
   return (
-    <div className="flex flex-col gap-6 px-8 py-7">
+    <PageContainer className="flex flex-col gap-6 px-8 py-7">
       <header className="flex flex-col gap-1">
         <h1 className="text-xl font-semibold tracking-tight">欢迎回来 👋</h1>
         <p className="text-sm text-neutral-600">
@@ -125,6 +126,6 @@ export default function HomePage() {
           <span className="font-medium text-neutral-800">docs/PROGRESS.md</span>。
         </p>
       </section>
-    </div>
+    </PageContainer>
   );
 }

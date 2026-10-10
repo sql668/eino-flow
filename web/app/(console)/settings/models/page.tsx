@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { PageContainer } from "@/components/layout/page-container";
 import { DefaultModelPanel } from "@/components/model-config/default-model-panel";
 import { ProviderCard } from "@/components/model-config/provider-card";
 import { Button } from "@/components/ui/button";
@@ -50,11 +51,11 @@ export default function ModelSettingsPage() {
   }, [providers, models, keyword]);
 
   return (
-    <div className="flex flex-col gap-5 px-8 py-7">
+    <PageContainer className="flex flex-col gap-5 px-8 py-7">
       <header className="flex flex-col gap-1">
         <h1 className="text-xl font-semibold tracking-tight">模型供应商</h1>
         <p className="text-sm leading-6 text-neutral-600">
-          厂商是内置的（Ollama / OpenAI 兼容接口 / TEI 边车），你只需要填服务地址与凭证。
+          厂商是内置的（Ollama / OpenAI 兼容接口 / TEI 重排服务），你只需要填服务地址与凭证。
           凭证以 AES-256-GCM 加密存储，接口与页面只会看到掩码。
         </p>
       </header>
@@ -134,6 +135,6 @@ export default function ModelSettingsPage() {
         说明：换掉向量化模型会改变向量空间。维度不一致时后端会直接报错（不会静默写入），
         此时需要清空向量集合后重新入库文档；重排模型可以随时替换，只会影响排序结果。
       </p>
-    </div>
+    </PageContainer>
   );
 }

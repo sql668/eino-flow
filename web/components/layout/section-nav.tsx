@@ -26,7 +26,7 @@ export function SectionNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="flex w-[200px] shrink-0 flex-col gap-0.5 border-r border-neutral-200 bg-white px-3 py-4">
+    <nav className="flex w-[200px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-neutral-200 bg-white px-3 py-4">
       {sections.map((item) => {
         const active = pathname.startsWith(item.href);
         const className = [

@@ -36,6 +36,8 @@ interface ModelConfigState {
   effective: EffectiveModelInfo | null;
   /** 当前生效的重排模型（未配置时为 null） */
   effectiveRerank: EffectiveModelInfo | null;
+  /** 当前生效的对话模型（未配置时为 null）；调用逻辑尚未接入，但配置状态要如实显示 */
+  effectiveLLM: EffectiveModelInfo | null;
   /** 首次加载中 */
   loading: boolean;
   /** 正在进行的操作标识（如 "provider:ollama"），用于按钮禁用 */
@@ -69,6 +71,7 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
   bindings: [],
   effective: null,
   effectiveRerank: null,
+  effectiveLLM: null,
   loading: false,
   pending: "",
   error: "",
@@ -79,14 +82,16 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
     try {
       // 查询互相独立，并发发出，减少首屏等待。
       // effective 分开取 embedding / rerank：两者可以由不同厂商提供，来源也可能不同。
-      const [providers, models, bindings, effective, effectiveRerank] = await Promise.all([
+      const [providers, models, bindings, effective, effectiveRerank, effectiveLLM] = await Promise.all([
         modelApi.listProviders(),
         modelApi.listModels(),
         modelApi.listBindings("global"),
         modelApi.effective("embedding"),
-        modelApi.effective("rerank").catch(() => null), // 未配置重排时接口会报错，属正常状态
+        // 未配置时接口返回 ErrNotConfigured，这属于正常状态（不是故障），捕获后按未配置展示。
+        modelApi.effective("rerank").catch(() => null),
+        modelApi.effective("llm").catch(() => null),
       ]);
-      set({ providers, models, bindings, effective, effectiveRerank, loading: false });
+      set({ providers, models, bindings, effective, effectiveRerank, effectiveLLM, loading: false });
     } catch (error) {
       set({ loading: false, error: describeError(error) });
     }

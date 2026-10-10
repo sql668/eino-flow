@@ -24,10 +24,11 @@ const scopeLabels: Record<string, string> = {
 export function DefaultModelPanel() {
   const effective = useModelConfigStore((state) => state.effective);
   const effectiveRerank = useModelConfigStore((state) => state.effectiveRerank);
+  const effectiveLLM = useModelConfigStore((state) => state.effectiveLLM);
 
   return (
     <div className="grid gap-3 lg:grid-cols-3">
-      <EffectiveCard kind="llm" effective={null} />
+      <EffectiveCard kind="llm" effective={effectiveLLM} />
       <EffectiveCard kind="embedding" effective={effective} />
       <EffectiveCard kind="rerank" effective={effectiveRerank} />
     </div>
@@ -41,16 +42,21 @@ function EffectiveCard({
   kind: ModelKind;
   effective: EffectiveModelInfo | null;
 }) {
-  // 对话模型还没有消费方：明确说明，而不是显示成「已就绪」。
-  const notWired = kind === "llm";
-  const configured = !notWired && effective !== null && effective.modelName !== "";
+  // 对话模型可以正常配置与显示，只是调用逻辑还没接入（随流式对话落地）。
+  // 之前这里一律显示「尚未接入」，导致配好了模型却像没生效——配置状态必须如实反映。
+  const configured = effective !== null && effective.modelName !== "";
   const dimensionText =
-    configured && effective && effective.dimension > 0 ? ` · ${effective.dimension} 维` : "";
-  const sourceText = notWired
-    ? "对话模型的调用随流式对话落地（见台账阶段 5）"
+    configured && kind === "embedding" && (effective?.dimension ?? 0) > 0
+      ? ` · ${effective.dimension} 维`
+      : "";
+  const sourceText = !configured
+    ? kind === "llm"
+      ? "还没有设定对话模型"
+      : "还没有绑定模型"
     : effective?.fromConfig
       ? "来自配置文件兜底，尚未在界面上绑定"
       : effective?.providerName || "—";
+  const note = kind === "llm" && configured ? "调用逻辑尚未接入（随流式对话落地）" : "";
 
   return (
     <div className="rounded-xl border border-neutral-200 bg-white px-4 py-3">
@@ -62,19 +68,20 @@ function EffectiveCard({
           </span>
         ) : (
           <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-500">
-            未启用
+            未配置
           </span>
         )}
       </div>
 
       <div className="mt-2 flex flex-col gap-1">
         <span className="truncate text-sm font-semibold text-neutral-900">
-          {notWired ? "尚未接入" : effective?.modelName || "未配置"}
+          {effective?.modelName || "未配置"}
         </span>
         <span className="truncate text-xs text-neutral-500">
           {sourceText}
           {dimensionText}
         </span>
+        {note ? <span className="text-[11px] text-amber-700">{note}</span> : null}
       </div>
     </div>
   );

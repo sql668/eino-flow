@@ -14,6 +14,16 @@
   }
 }
 
+/* 布局约定（见 web/AGENTS.md「滚动」）：文档本身不滚动，
+   只有明确标记为滚动区的容器才有滚动条。
+   做法：把 html/body 固定为一屏高且不溢出，再由 AppShell 决定哪一块滚动。
+   这样侧边导航不会跟着内容滚走，也不会出现「整页滚动 + 区域滚动」双重滚动条。 */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   color: var(--foreground);
   background: var(--background);
