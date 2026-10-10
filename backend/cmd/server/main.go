@@ -227,6 +227,7 @@ func main() {
 		DefaultTopK:          cfg.Retrieval.TopK,
 		DefaultCandidateTopK: cfg.Retrieval.CandidateTopK,
 		RerankEnabled:        cfg.Retrieval.RerankEnabled(),
+		RerankStrict:         cfg.Retrieval.RerankStrict(),
 	})
 	retrievalService := service.NewRetrievalService(
 		datasetRepository,

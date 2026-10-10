@@ -14,7 +14,10 @@ import (
 	"einoflow-backend/internal/model"
 )
 
-// teiProvider 是 HuggingFace text-embeddings-inference（TEI）推理服务。
+// teiProvider 对接「TEI 协议」的重排服务。
+//
+// 协议兼容是关键：官方 TEI 镜像与项目自带的 deploy/rerank-local 说同一套 HTTP 接口，
+// 因此同一份配置在 Linux 服务器与 macOS 开发机上都能用，后端不需要感知差异。
 //
 // 对外展示名刻意不叫「边车」：那是部署术语，使用者看到「TEI 边车」并不知道它干什么。
 //
@@ -35,8 +38,11 @@ func (p *teiProvider) ID() string          { return "tei" }
 func (p *teiProvider) DisplayName() string { return "TEI 重排服务" }
 
 func (p *teiProvider) Description() string {
-	return "HuggingFace 的文本推理服务，本项目用它承载重排（Ollama 没有重排接口）；" +
-		"由 docker compose --profile rerank up -d tei 启动。"
+	// 描述里点明「两种运行方式」：开源之后别人用的机器各不相同，
+	// 只写一种会让 Apple Silicon 或没装 Docker 的人以为这功能用不了。
+	return "承载重排的推理服务（Ollama 没有重排接口）。两种跑法协议一致，任选其一：" +
+		"Linux 服务器用 docker compose --profile rerank up -d tei（官方 TEI 镜像）；" +
+		"macOS / 无 Docker 环境用 deploy/rerank-local（PyTorch 直接调本机 GPU）。"
 }
 func (p *teiProvider) DefaultBaseURL() string { return "http://127.0.0.1:8080" }
 

@@ -234,9 +234,11 @@ Milvus 只存三样东西：主键、两个过滤字段（dataset_id / document_
   不分开的话，重排只能在最终条数里挑，等于没有挑选空间；
 - **逐请求可开关**：`rerank` 三态（不传=按配置 / true / false），
   这样页面与命令行都能直接做「开重排 vs 关重排」的 A/B 对比；
-- **未配置 ≠ 失败**：解析器返回 `ErrNotConfigured` 时跳过重排并**说明原因**（`rerankSkipped`），
-  而调用失败、分数条数不符则一律报错——**不静默降级**，
-  否则「重排没跑」会被误读成「重排没效果」；
+- **重排策略三档**（`retrieval.rerank`）：`auto`（默认，配了就用；未配置或服务不可用都降级为
+  向量顺序，并在 `rerankSkipped` 里写明原因）、`off`（不用）、`strict`（不可用即检索失败）。
+  取 `auto` 为默认是面向开源后的实际部署——重排是可选的额外组件，它挂了不该把检索一起拖下水；
+  但降级**必须可见**：响应字段 + 服务端日志 + 界面提示，不做静默降级。
+  分数条数不符属于接口异常，任何档位下都直接报错；
 - **两阶段都留痕**：vector 阶段记全部候选（含向量分数），rerank 阶段记最终结果（含两个分数），
   `retrieval_runs` 补 `candidate_count` 与 `rerank_model`。
   只记最终结果的话，「重排把哪条提上来」无从回溯；
@@ -245,6 +247,29 @@ Milvus 只存三样东西：主键、两个过滤字段（dataset_id / document_
 - **边车模型来自本地路径**：TEI 自带下载器要求响应带 ETag，hf-mirror 不返回该头，
   因此用一次性容器先把模型拉到卷里，再让边车按本地路径加载。
   模型名的比对容忍路径形式（`/data/models/BAAI/xxx` 视为与 `BAAI/xxx` 同一个模型）。
+
+**D10 · 跨机器适配：环境差异收在「启动层」，代码只认协议**
+
+开源之后，别人会在不同的机器上启动这个项目（Apple Silicon / Intel Mac、x86_64 服务器、
+有 GPU / 没 GPU、国内 / 国外网络）。原则是：**代码只依赖协议与接口，差异在启动脚本里消掉。**
+
+已落地的具体做法：
+
+| 差异点 | 处理方式 |
+| --- | --- |
+| 重排服务的运行形态 | 官方 TEI 镜像只发布 linux/amd64；Apple Silicon 上容器里也拿不到 AVX2（只能走标量内核）。因此提供**协议一致**的两条路：Linux 用 `docker compose --profile rerank up -d tei`，macOS / 无 Docker 用 `deploy/rerank-local`（PyTorch 直接调本机 GPU）。后端只认 TEI 协议的 HTTP 接口，两种实现可互换 |
+| 有无 GPU | `deploy/rerank-local` 的 `--device auto` 按 **mps → cuda → cpu** 探测；退到 CPU 时明确打日志（静默退会让使用者以为「开了 GPU 还是这么慢」） |
+| 镜像平台 | compose 里 `platform: ${TEI_PLATFORM:-linux/amd64}` 可覆盖，x86 服务器与 arm64 镜像可各取所需 |
+| HuggingFace 可达性 | 下载器容器**运行时探测**：先试 huggingface.co，不可达再用 hf-mirror；并设 `HF_HUB_DISABLE_XET=1`（镜像站不代理 Xet 存储，会返回 401） |
+| 包管理器 / Python 源 | `bootstrap.sh` 优先用 uv、退回 venv；`PIP_INDEX_URL` / `TORCH_INDEX_URL` 可覆盖 |
+| 端口检测 | 用 bash 内建 `/dev/tcp` 而不是 `nc`（各发行版预装情况不同，Alpine 默认没有） |
+| 模型缓存位置 | 统一在 `deploy/models/`（compose 与本地服务共用一份，不重复下载 2GB） |
+
+判断标准：**新同学只需要知道「我的机器有没有 NVIDIA GPU / 是不是 Apple Silicon」，
+不需要读源码或改配置**；所有平台相关的判断都出现在启动脚本与文档里，不在业务代码里。
+
+实测对比（同一模型 bge-reranker-v2-m3、同样 2 条候选）：
+TEI 走 amd64 模拟 **216 秒**，本机 MPS 服务 **0.52 秒**；20 条候选 MPS 下 0.54 秒（批处理 + GPU 并行）。
 
 ## 6. 已知限制与技术债
 
@@ -263,7 +288,7 @@ Milvus 只存三样东西：主键、两个过滤字段（dataset_id / document_
 | 11 | 模型配置缓存是**进程内**的 | 多实例部署时，A 实例改了配置，B 实例最长 60s 后才生效 | 单实例演示无影响；多实例时改为 Redis 失效广播 |
 | 12 | `model_instances` 没有参数列 | 温度、top_p、rerank top_n 等模型参数暂无处可配 | 对话 / 重排落地时加 `params` JSONB 列 |
 | 13 | 应用级 / 知识库级覆盖没有界面 | 只能用接口绑定，配置页只做了全局默认 | 阶段 4 做检索追踪页时一并补上 |
-| 14 | **本机（Apple Silicon）跑 TEI 极慢** | CPU 版镜像只有 linux/amd64，容器内无 AVX2，走标量路径：实测 2 条候选 216 秒、1 条候选超 120 秒超时 | 本地 `.env` 默认 `EINOFLOW_RETRIEVAL_RERANK=off`（检索本身不受影响）；部署到 CentOS x86_64 后改回 `auto` 即为原生执行。需要本地看效果时把 `TEI_MODEL_ID` 换成更小的模型（如 cross-encoder/ms-marco-MiniLM-L-6-v2） |
+| 14 | 容器版 TEI 在 Apple Silicon 上极慢 | CPU 版镜像只有 linux/amd64，容器内无 AVX2，走标量路径：实测 2 条候选 216 秒 | **已解决**：改用 `deploy/rerank-local`（本机 GPU，0.52 秒），协议与 TEI 一致、后端无需改代码；x86 服务器仍用官方镜像 |
 | 15 | **2 核 2G 服务器装不下全部组件** | Milvus + MinerU + TEI 三者叠加超出 2C2G | 演示只起核心（Postgres / Milvus / MinIO / 后端 / 前端），解析与重排按需启动或放到其它机器 |
 | 16 | 重排超时是写死的 120 秒 | 远程或模拟环境下可能需要更长，也可能希望更短 | 接入配置项（`rerank.timeout`）而不是改常量 |
 
@@ -274,7 +299,8 @@ Milvus 只存三样东西：主键、两个过滤字段（dataset_id / document_
 | 1 | 模型解析接口（配置驱动）+ Embedding(bge-m3) + Milvus + 检索接口 + 溯源字段返回 | ✅ 已完成（2026-10-10 实测通过） |
 | 2 | 模型配置模块（表 + 加密 + API + 前端页面 + 连通性测试） | ✅ 已完成（2026-10-10 实测通过） |
 | 3 | Rerank 边车（TEI）+ provider 路由 + 两阶段分数落库 | ✅ 已完成（2026-10-10，代码链路全部通过测试；本机模拟环境的性能见技术债 14） |
-| 4 | 检索追踪页面（命中片段可视化） | ⬜ 下一步 |
+| 4 | 检索追踪页面（命中片段可视化） | ⬜ |
+| 5 | Eino 内核接入 + RAG 问答 + SSE 流式对话 | 🚧 后端已完成并实测；前端对话调试页与单测待补 |
 | 5（新增） | Eino 内核接入 + ReAct/RAG 问答 + SSE 流式对话 | ⬜ V0.1 收尾的关键一步 |
 
 阶段 1 实测结论（2026-10-10，本机全链路）：

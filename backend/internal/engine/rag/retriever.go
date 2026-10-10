@@ -80,6 +80,8 @@ type Retriever struct {
 	defaultCandidateTopK int
 	// rerankEnabled 是默认策略：配了重排模型是否直接使用。
 	rerankEnabled bool
+	// rerankStrict 决定重排失败时是报错还是降级。
+	rerankStrict bool
 }
 
 // RetrieverDeps 是检索器依赖。
@@ -91,6 +93,9 @@ type RetrieverDeps struct {
 	DefaultCandidateTopK int
 	// RerankEnabled 为 true 时，未显式指定就默认执行重排。
 	RerankEnabled bool
+	// RerankStrict 为 true 时，重排调用失败直接让检索失败；
+	// 为 false 时降级为向量顺序，并在结果里写明原因（见 RerankSkipped）。
+	RerankStrict bool
 }
 
 // NewRetriever 构造检索器。
@@ -102,6 +107,7 @@ func NewRetriever(deps RetrieverDeps) *Retriever {
 		defaultTopK:          deps.DefaultTopK,
 		defaultCandidateTopK: deps.DefaultCandidateTopK,
 		rerankEnabled:        deps.RerankEnabled,
+		rerankStrict:         deps.RerankStrict,
 	}
 }
 
@@ -227,9 +233,15 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 	}
 	scores, err := reranker.Rerank(ctx, query, texts)
 	if err != nil {
-		// 调用重排失败不降级：静默返回向量顺序会让使用者以为「重排没效果」，
-		// 而实际上重排根本没跑，问题被掩盖了。
-		return RetrieveOutput{}, fmt.Errorf("重排失败: %w", err)
+		if r.rerankStrict {
+			// strict 档：使用者的诉求是「宁可失败也要精排质量」，直接报错。
+			return RetrieveOutput{}, fmt.Errorf("重排失败: %w", err)
+		}
+		// auto 档：重排是可选组件，它挂了不该把检索一起拖下水，但降级必须**可见**——
+		// 响应里写明原因（rerankSkipped），日志里留下错误，不能静默当成「重排没效果」。
+		output.RerankSkipped = fmt.Sprintf("重排服务不可用，已按向量顺序返回：%v", err)
+		output.Hits = topHits(output.Candidates, topK)
+		return output, nil
 	}
 	if len(scores) != len(output.Candidates) {
 		return RetrieveOutput{}, fmt.Errorf("重排返回的分数数量（%d）与候选数（%d）不一致",

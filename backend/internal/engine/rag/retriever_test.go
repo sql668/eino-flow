@@ -461,20 +461,54 @@ func TestRetriever_RerankNotConfigured(t *testing.T) {
 	}
 }
 
-// TestRetriever_RerankFailure 覆盖重排调用失败：
-// 必须报错而不是静默降级回向量顺序——降级会把「重排没跑」伪装成「重排没效果」。
-func TestRetriever_RerankFailure(t *testing.T) {
+// TestRetriever_RerankFailureAuto 覆盖 auto 档下重排服务不可用：
+// 降级为向量顺序，但**必须写明原因**——静默降级会把「重排没跑」伪装成「重排没效果」。
+func TestRetriever_RerankFailureAuto(t *testing.T) {
+	embedder := &fakeEmbedder{name: "fake-embed", dim: 2, vectors: [][]float32{{1, 0}}}
+	vectors := &fakeVectorStore{matches: []repository.VectorMatch{
+		{SegmentID: 11, Score: 0.9},
+		{SegmentID: 22, Score: 0.8},
+	}}
+	segments := &fakeSegmentRepo{items: []repository.RetrievedSegment{
+		{Segment: &domainmodel.Segment{ID: 11, Content: "甲"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 22, Content: "乙"}, DocumentName: "a.pdf"},
+	}}
+	reranker := &fakeReranker{name: "fake-rerank", err: errors.New("服务 503")}
+
+	retriever := newTestRetrieverWith(embedder, reranker, vectors, segments, true)
+	out, err := retriever.Retrieve(context.Background(), rag.RetrieveRequest{DatasetID: 1, Query: "问题"})
+	if err != nil {
+		t.Fatalf("auto 档不应让检索失败: %v", err)
+	}
+	if !strings.Contains(out.RerankSkipped, "重排服务不可用") {
+		t.Fatalf("未说明降级原因: %q", out.RerankSkipped)
+	}
+	if len(out.Hits) != 2 || out.Hits[0].RerankScore != nil {
+		t.Fatalf("降级后应按向量顺序返回且无重排分: %+v", out.Hits)
+	}
+}
+
+// TestRetriever_RerankFailureStrict 覆盖 strict 档：宁可检索失败也要保证精排质量。
+func TestRetriever_RerankFailureStrict(t *testing.T) {
 	embedder := &fakeEmbedder{name: "fake-embed", dim: 2, vectors: [][]float32{{1, 0}}}
 	vectors := &fakeVectorStore{matches: []repository.VectorMatch{{SegmentID: 11, Score: 0.9}}}
 	segments := &fakeSegmentRepo{items: []repository.RetrievedSegment{
 		{Segment: &domainmodel.Segment{ID: 11, Content: "甲"}, DocumentName: "a.pdf"},
 	}}
-	reranker := &fakeReranker{name: "fake-rerank", err: errors.New("边车 503")}
+	reranker := &fakeReranker{name: "fake-rerank", err: errors.New("服务 503")}
 
-	retriever := newTestRetrieverWith(embedder, reranker, vectors, segments, true)
+	retriever := rag.NewRetriever(rag.RetrieverDeps{
+		Models:               &fakeResolver{embedder: embedder, reranker: reranker},
+		Vectors:              vectors,
+		Segments:             segments,
+		DefaultTopK:          3,
+		DefaultCandidateTopK: 10,
+		RerankEnabled:        true,
+		RerankStrict:         true,
+	})
 	if _, err := retriever.Retrieve(
 		context.Background(), rag.RetrieveRequest{DatasetID: 1, Query: "问题"}); err == nil {
-		t.Fatal("重排失败时应报错")
+		t.Fatal("strict 档下重排失败应报错")
 	}
 }
 

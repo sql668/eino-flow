@@ -179,9 +179,14 @@ type RetrievalConfig struct {
 	// CandidateTopK 是重排前的向量召回条数，必须 >= TopK：
 	// 召回比最终结果还少，重排就无从选起。
 	CandidateTopK int `yaml:"candidate_top_k"`
-	// RerankMode 控制重排是否启用：
-	//   auto（默认）—— 配了重排模型就用，没配就跳过并说明原因；
-	//   off        —— 即使配了也不用（用于对比两阶段检索的效果差异）。
+	// RerankMode 控制重排策略，三档：
+	//   auto（默认）—— 配了重排模型就用；没配或**调用失败**都降级为向量顺序，
+	//                  并在响应的 rerankSkipped 里写明原因；
+	//   off         —— 即使配了也不用（用于对比两阶段检索的效果差异）；
+	//   strict      —— 配了就必须成功，调用失败即报错（宁可检索失败也要保证精排质量）。
+	//
+	// 默认取 auto 是面向开源后的实际部署：重排是**可选组件**（要额外跑一个服务），
+	// 它挂了不该把整个检索拖下水；同时降级必须可见（响应字段 + 日志），不能静默。
 	RerankMode string `yaml:"rerank"`
 }
 
@@ -198,6 +203,8 @@ const (
 	RerankModeAuto = "auto"
 	// RerankModeOff 表示显式关闭。
 	RerankModeOff = "off"
+	// RerankModeStrict 表示重排失败即检索失败。
+	RerankModeStrict = "strict"
 )
 
 // RerankEnabled 判断默认是否执行重排。
@@ -206,6 +213,11 @@ const (
 // 这样才能在页面上直接对比「开重排 / 关重排」的效果。
 func (r RetrievalConfig) RerankEnabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(r.RerankMode), RerankModeOff)
+}
+
+// RerankStrict 判断重排失败时是否直接让检索失败。
+func (r RetrievalConfig) RerankStrict() bool {
+	return strings.EqualFold(strings.TrimSpace(r.RerankMode), RerankModeStrict)
 }
 
 // SecurityConfig 描述安全相关配置。
@@ -563,10 +575,10 @@ func (c *Config) validate() error {
 			model.MaxCandidateTopK, c.Retrieval.CandidateTopK)
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Retrieval.RerankMode)) {
-	case RerankModeAuto, RerankModeOff:
+	case RerankModeAuto, RerankModeOff, RerankModeStrict:
 	default:
-		return fmt.Errorf("retrieval.rerank 只支持 %s / %s，当前为 %q",
-			RerankModeAuto, RerankModeOff, c.Retrieval.RerankMode)
+		return fmt.Errorf("retrieval.rerank 只支持 %s / %s / %s，当前为 %q",
+			RerankModeAuto, RerankModeOff, RerankModeStrict, c.Retrieval.RerankMode)
 	}
 	if c.Security.SecretKey == "" {
 		return fmt.Errorf(
