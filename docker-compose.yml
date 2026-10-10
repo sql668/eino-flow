@@ -3,7 +3,7 @@
 # 参考并整合了本地 Milvus 编排：
 #   /Users/shiqingliang/Documents/docker-app/milvus/docker-compose.yml
 #
-# 服务：MySQL / Redis / MinIO / etcd / Milvus / Attu
+# 服务：PostgreSQL / Redis / MinIO / etcd / Milvus / Attu
 #   - MinIO 由业务对象存储与 Milvus 后端存储共用：业务用 bucket `einoflow`，Milvus 用 bucket `milvus`。
 #   - Attu 使用 3000 端口，因此前端 dev 固定跑 3001（见 web/package.json）。
 #
@@ -15,24 +15,27 @@
 name: einoflow
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: einoflow-mysql
+  postgres:
+    image: postgres:15-alpine
+    container_name: einoflow-postgres
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-einoflow_root}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-einoflow}
-      MYSQL_USER: ${MYSQL_USER:-einoflow}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-einoflow}
+      POSTGRES_USER: ${POSTGRES_USER:-einoflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-einoflow}
+      POSTGRES_DB: ${POSTGRES_DB:-einoflow}
+      # 容器与数据库两侧都固定 UTC，和应用连接参数保持一致
+      TZ: UTC
+      PGTZ: UTC
     command:
-      - --character-set-server=utf8mb4
-      - --collation-server=utf8mb4_unicode_ci
+      - postgres
+      - -c
+      - timezone=UTC
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - mysql-data:/var/lib/mysql
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-einoflow} -d ${POSTGRES_DB:-einoflow}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -138,9 +141,41 @@ services:
     depends_on:
       - milvus
 
+  # ---------- 文档解析服务 ----------
+  # 放在 rag profile 下：镜像需要现场构建（约 3-5GB，首次较慢），
+  # 不想解析文档时没必要为它付出构建成本。
+  #   make up-rag   → 启动含 MinerU 的完整栈
+  # 解析接口：POST http://127.0.0.1:8000/v1/...（V1 API），健康检查 /v1/health
+  mineru:
+    build:
+      context: ./deploy/mineru
+    image: einoflow-mineru:4
+    container_name: einoflow-mineru
+    profiles: ["rag"]
+    restart: unless-stopped
+    environment:
+      MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-modelscope}
+      MINERU_HOME: /data/mineru
+    ports:
+      - "8000:8000"
+    volumes:
+      - mineru-data:/data/mineru
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/v1/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 300s
+      retries: 5
+    # OCR 与版面分析是 CPU 密集型，限制内存避免拖垮整机（Milvus 还在同一台机器上）
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+
 volumes:
-  mysql-data:
+  postgres-data:
   redis-data:
   minio-data:
   etcd-data:
   milvus-data:
+  mineru-data:

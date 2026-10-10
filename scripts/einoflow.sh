@@ -131,7 +131,7 @@ wait_deps() {
 # ---------- 各组件 ----------
 
 start_deps() {
-  info "启动依赖容器（MySQL / Redis / MinIO / etcd / Milvus / Attu）"
+  info "启动依赖容器（PostgreSQL / Redis / MinIO / etcd / Milvus / Attu）"
   docker compose up -d
   wait_deps
 }

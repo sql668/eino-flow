@@ -6,7 +6,7 @@
 
 - 前端：Next.js 14+（App Router）· React 18 · TypeScript · @xyflow/react · Zustand · TailwindCSS + shadcn/ui
 - 后端：Go 1.25 · CloudWeGo Hertz · CloudWeGo Eino
-- 存储：MySQL（业务）· Milvus（向量）· MinIO（对象）· Redis（缓存 / 会话）
+- 存储：PostgreSQL（业务）· Milvus（向量）· MinIO（对象）· Redis（缓存 / 会话）
 - 可观测：OpenTelemetry + Eino Callback
 
 ## 目录结构
@@ -22,7 +22,7 @@
 ## 快速开始
 
 ```bash
-# 1. 启动本地依赖（MySQL / Redis / MinIO）
+# 1. 启动本地依赖（PostgreSQL / Redis / MinIO）
 make up
 
 # 2. 准备后端配置（可选，密钥走环境变量）
@@ -37,17 +37,33 @@ make web-install && make web-dev
 
 后端健康检查：`GET /healthz`、`GET /readyz`。
 
+### 模型服务（RAG 必需）
+
+后端启动时会校验向量化模型与向量集合，**模型不可用会直接启动失败**（避免「看起来在跑但检索总是空」）。
+本地默认用 Ollama + `bge-m3`（1024 维）：
+
+```bash
+ollama pull bge-m3:latest          # 模型必须在本地
+curl http://127.0.0.1:11434/api/tags   # 确认 Ollama 在跑
+```
+
+模型地址 / 模型名 / 维度来源见 `backend/configs/config.yaml` 的 `embedding` 一节：
+维度不在配置里写死，启动时向服务端探测，并与已有 Milvus 集合比对，不一致直接报错。
+换 embedding 模型后必须重建集合（删除 `einoflow_segments` 后重启后端会自动重建）。
+
 ## 本地依赖说明
 
 | 组件 | 地址 | 说明 |
 | --- | --- | --- |
-| MySQL | 3306 | 业务数据 |
+| PostgreSQL | 5432 | 业务数据 |
 | Redis | 6379 | 会话 / 缓存 |
 | MinIO | 9000（控制台 9001） | 业务对象存储 bucket `einoflow`，Milvus 后端 bucket `milvus` |
 | Milvus | 19530（gRPC）、9091（指标） | 向量检索 |
 | Attu | 3000 | Milvus 可视化管理台 |
+| MinerU | 8000（V1 API，健康检查 `/v1/health`） | 文档解析（版面分析 + OCR），在 `rag` profile 下 |
 
 - 全部由根目录 `docker-compose.yml` 编排：`make up` 启动，`make ps` 查看状态，`make milvus-status` 查看 Milvus 侧。
+- 文档解析服务 MinerU 较重（首次需构建镜像，约 1GB），放在 `rag` profile：`make up-rag` 一并启动。
 - 前端 dev 端口固定为 **3001**，因为 3000 已被 Attu 占用。
 - 本机另有一套独立 Milvus 编排（`/Users/shiqingliang/Documents/docker-app/milvus/`），端口重叠，
   启动本项目前请先在其目录执行 `docker compose down`。

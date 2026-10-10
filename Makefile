@@ -59,8 +59,12 @@ web-check: ## 前端自检：lint + 类型检查 + 构建
 
 # ---------- 本地基础设施 ----------
 .PHONY: up
-up: ## 启动全部本地依赖（MySQL / Redis / MinIO / etcd / Milvus / Attu）
+up: ## 启动全部本地依赖（PostgreSQL / Redis / MinIO / etcd / Milvus / Attu）
 	docker compose up -d
+
+.PHONY: up-rag
+up-rag: ## 启动完整栈（额外含 MinerU 文档解析服务，首次需构建镜像）
+	docker compose --profile rag up -d
 
 .PHONY: ps
 ps: ## 查看本项目容器状态

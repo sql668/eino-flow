@@ -104,3 +104,7 @@ __debug_bin*
 /volumes/
 docker-compose.override.yml
 *.pid
+
+
+# ----rag 测试文档 ----
+docs/rag-test/
