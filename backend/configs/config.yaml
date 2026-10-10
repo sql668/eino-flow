@@ -12,13 +12,24 @@ server:
 log:
   level: info         # debug / info / warn / error
 
-mysql:
+postgres:
   host: 127.0.0.1
-  port: 3306
-  user: einoflow      # 对应 docker-compose.yml 里 MYSQL_USER 的默认值
-  password: ""        # 通过 EINOFLOW_MYSQL_PASSWORD 注入
+  port: 5432
+  user: einoflow       # 对应 docker-compose.yml 里 POSTGRES_USER 的默认值
+  password: ""         # 通过 EINOFLOW_POSTGRES_PASSWORD 注入
   database: einoflow
-  charset: utf8mb4
+  sslmode: disable     # 本地 / 内网用 disable；云上一般改 require
+
+  # 连接池
+  max_open_conns: 20
+  max_idle_conns: 5
+  conn_max_lifetime: 1h
+
+  # 说明：时间统一用 timestamptz 存绝对时刻（连接参数已固定 TimeZone=UTC），
+  # 不存在「存 UTC、按本地时区解析」的偏差；展示成本地时间交给前端处理。
+
+  # 启动时自动执行数据库迁移；本地开发方便，生产建议关闭改为部署时执行
+  auto_migrate: true
 
 
 redis:
@@ -33,6 +44,22 @@ milvus:
   username: ""
   password: ""
   database: einoflow
+  # 分段向量集合。所有知识库共用一个集合，靠 dataset_id 字段区分；
+  # 改这个名等于换一个向量库，旧集合不会自动清理。
+  collection: einoflow_segments
+
+# 向量化模型（Embedding）。当前指向本机 Ollama 的 bge-m3（1024 维），
+# 选型理由与实测数据见 docs/PROGRESS.md D5。
+# 维度不在这里配置：启动时向服务端探测，避免换模型后留下写死的错值。
+embedding:
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  model: bge-m3:latest
+  batch_size: 16 # 单次请求的文本条数
+
+# 检索默认参数（请求带了 top_k 时以请求为准，上限 50）
+retrieval:
+  top_k: 5
 
 # 对象存储：本项目 docker-compose.yml 的 minio 服务（业务 bucket 与 Milvus bucket 共用该实例）
 minio:
@@ -41,4 +68,13 @@ minio:
   secret_key: ""      # 通过 EINOFLOW_MINIO_SECRET_KEY 注入
   bucket: einoflow
   use_ssl: false
+
+# 文档解析服务（MinerU V1 API），由根目录 docker-compose.yml 的 mineru 服务提供
+mineru:
+  base_url: http://127.0.0.1:8000
+  token: ""            # 通过 EINOFLOW_MINERU_TOKEN 注入（服务端启用鉴权时必填）
+  tier: basic          # flash / basic / standard / advanced；basic 覆盖 OCR 与版面分析且不需要 VLM
+  timeout: 15m         # 单文档解析等待上限，扫描件较慢
+  chunk_max_runes: 800 # 切片长度上限（字符数）；留 0 用切片器默认值
+  chunk_min_runes: 40  # 独立成段的最小长度；留 0 用切片器默认值
 

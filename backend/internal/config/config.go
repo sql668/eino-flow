@@ -7,11 +7,16 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"einoflow-backend/internal/model"
 )
 
 const (
@@ -23,13 +28,19 @@ const (
 
 // Config 是应用顶层配置，结构对应 configs/config.yaml。
 type Config struct {
-	App    AppConfig    `yaml:"app"`
-	Server ServerConfig `yaml:"server"`
-	Log    LogConfig    `yaml:"log"`
-	MySQL  MySQLConfig  `yaml:"mysql"`
-	Redis  RedisConfig  `yaml:"redis"`
-	Milvus MilvusConfig `yaml:"milvus"`
-	MinIO  MinIOConfig  `yaml:"minio"`
+	App      AppConfig      `yaml:"app"`
+	Server   ServerConfig   `yaml:"server"`
+	Log      LogConfig      `yaml:"log"`
+	Postgres PostgresConfig `yaml:"postgres"`
+	Redis    RedisConfig    `yaml:"redis"`
+	Milvus   MilvusConfig   `yaml:"milvus"`
+	MinIO    MinIOConfig    `yaml:"minio"`
+	MinerU   MinerUConfig   `yaml:"mineru"`
+	// Embedding / Retrieval 是模型与检索配置。
+	// 阶段 1 先走配置文件（见 docs/PROGRESS.md 第 7 节），阶段 2 会换成数据库驱动，
+	// 届时这两节的定位变成「默认值 + 兜底」，消费方（engine/rag）不用改。
+	Embedding EmbeddingConfig `yaml:"embedding"`
+	Retrieval RetrievalConfig `yaml:"retrieval"`
 }
 
 // AppConfig 描述应用自身元信息。
@@ -67,26 +78,45 @@ type LogConfig struct {
 	Level string `yaml:"level"` // debug / info / warn / error
 }
 
-// MySQLConfig 描述业务数据库连接配置。
-type MySQLConfig struct {
+// PostgresConfig 描述业务数据库连接配置。
+type PostgresConfig struct {
 	Host     string `yaml:"host"`
 	Port     int    `yaml:"port"`
 	User     string `yaml:"user"`
 	Password string `yaml:"password"`
 	Database string `yaml:"database"`
-	Charset  string `yaml:"charset"`
+	// SSLMode 对应 PostgreSQL 的 sslmode：本地 / 内网用 disable，云上一般用 require。
+	SSLMode string `yaml:"sslmode"`
+
+	// 连接池参数
+	MaxOpenConns    int      `yaml:"max_open_conns"`
+	MaxIdleConns    int      `yaml:"max_idle_conns"`
+	ConnMaxLifetime Duration `yaml:"conn_max_lifetime"`
+
+	// AutoMigrate 为 true 时服务启动会自动执行数据库迁移。
+	// 本地开发方便；生产建议关闭，改由部署流程显式执行，避免多实例并发迁移。
+	AutoMigrate bool `yaml:"auto_migrate"`
 }
 
-// DSN 返回 database/sql 所需的数据源名称。
-func (m MySQLConfig) DSN() string {
-	charset := m.Charset
-	if charset == "" {
-		charset = "utf8mb4"
+// DSN 返回 PostgreSQL 连接串。
+//
+// 两点说明：
+//   - 用 URL 形式而不是 "key=value" 形式，是为了让密码中的特殊字符由标准库正确转义；
+//   - TimeZone=UTC 把连接会话时区固定为 UTC。配合 timestamptz，时间在存储层就是绝对时刻，
+//     不存在 MySQL DATETIME 那种「存进去是 UTC、读出来按本地时区解析」的偏差。
+func (p PostgresConfig) DSN() string {
+	sslMode := p.SSLMode
+	if sslMode == "" {
+		sslMode = defaultPostgresSSLMode
 	}
-	return fmt.Sprintf(
-		"%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=true&loc=Local",
-		m.User, m.Password, m.Host, m.Port, m.Database, charset,
-	)
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(p.User, p.Password),
+		Host:     net.JoinHostPort(p.Host, strconv.Itoa(p.Port)),
+		Path:     "/" + p.Database,
+		RawQuery: url.Values{"sslmode": {sslMode}, "TimeZone": {"UTC"}}.Encode(),
+	}
+	return u.String()
 }
 
 // RedisConfig 描述缓存 / 会话存储配置。
@@ -117,6 +147,31 @@ type MilvusConfig struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
 	Database string `yaml:"database"`
+	// Collection 是存放分段向量的集合名。
+	// 所有知识库**共用一个集合**，靠 dataset_id 字段过滤区分：
+	// 「一个知识库一个集合」会产生大量小集合，每个都要单独建索引与加载，运维成本高得多。
+	Collection string `yaml:"collection"`
+}
+
+// EmbeddingConfig 描述向量化模型（Embedding）配置。
+//
+// 只描述「用哪个模型、在哪调用」三件事，不含业务参数；
+// 模型名与维度不做绑定（维度由启动时探测得到），避免换模型时留下错误的写死值。
+type EmbeddingConfig struct {
+	// Provider 是厂商标识，目前支持 ollama。
+	Provider string `yaml:"provider"`
+	// BaseURL 是向量化服务的地址。
+	BaseURL string `yaml:"base_url"`
+	// Model 是模型名，例如 bge-m3:latest。
+	Model string `yaml:"model"`
+	// BatchSize 是单次请求的文本条数，<=0 时用实现内的默认值。
+	BatchSize int `yaml:"batch_size"`
+}
+
+// RetrievalConfig 描述检索的默认参数。
+// 这里的值是**兜底默认**：请求未指定 top_k 时生效，请求指定时以请求为准（上限见 maxRetrievalTopK）。
+type RetrievalConfig struct {
+	TopK int `yaml:"top_k"`
 }
 
 // MinIOConfig 描述对象存储配置。
@@ -128,13 +183,49 @@ type MinIOConfig struct {
 	UseSSL    bool   `yaml:"use_ssl"`
 }
 
+// MinerUConfig 描述文档解析服务（MinerU）配置。
+type MinerUConfig struct {
+	// BaseURL 是 MinerU V1 API 地址，例如 http://127.0.0.1:8000。
+	BaseURL string `yaml:"base_url"`
+	// Token 可选：服务端开启鉴权时必填。
+	Token string `yaml:"token"`
+	// Tier 是默认解析档位：flash / basic / standard / advanced。
+	Tier string `yaml:"tier"`
+	// Timeout 是单个文档解析的等待上限。扫描件慢，给得比较宽松。
+	Timeout Duration `yaml:"timeout"`
+	// ChunkMaxRunes / ChunkMinRunes 是切片长度参数，留 0 时由切片器取自己的默认值。
+	ChunkMaxRunes int `yaml:"chunk_max_runes"`
+	ChunkMinRunes int `yaml:"chunk_min_runes"`
+}
+
 const (
 	defaultServerPort    = 8888
-	defaultMySQLPort     = 3306
+	defaultPostgresPort  = 5432
 	defaultRedisPort     = 6379
 	defaultMilvusAddress = "127.0.0.1:19530"
 	defaultMinIOEndpoint = "127.0.0.1:9000"
 	defaultMinIOBucket   = "einoflow"
+
+	// 分段向量集合名。改名等于换一个库，旧集合不会自动清理，因此不要在部署中途随意改。
+	defaultMilvusCollection = "einoflow_segments"
+
+	// Embedding 默认指向本机 Ollama + bge-m3（1024 维），理由见 docs/PROGRESS.md D5。
+	defaultEmbeddingProvider  = "ollama"
+	defaultEmbeddingBaseURL   = "http://127.0.0.1:11434"
+	defaultEmbeddingModel     = "bge-m3:latest"
+	defaultEmbeddingBatchSize = 16
+
+	// 检索参数的默认值与上限来自领域定义，避免与请求校验各写一份。
+	defaultRetrievalTopK = model.DefaultRetrievalTopK
+
+	defaultPostgresSSLMode         = "disable"
+	defaultPostgresMaxOpenConns    = 20
+	defaultPostgresMaxIdleConns    = 5
+	defaultPostgresConnMaxLifetime = time.Hour
+
+	defaultMinerUBaseURL = "http://127.0.0.1:8000"
+	defaultMinerUTier    = "basic"
+	defaultMinerUTimeout = 15 * time.Minute
 )
 
 // Load 读取配置。路径优先级为：显式入参 > 环境变量 EINOFLOW_CONFIG > 默认 configs/config.yaml。
@@ -183,11 +274,11 @@ func (c *Config) applyDefaults() {
 	if c.Server.Port == 0 {
 		c.Server.Port = defaultServerPort
 	}
-	if c.MySQL.Charset == "" {
-		c.MySQL.Charset = "utf8mb4"
+	if c.Postgres.Port == 0 {
+		c.Postgres.Port = defaultPostgresPort
 	}
-	if c.MySQL.Port == 0 {
-		c.MySQL.Port = defaultMySQLPort
+	if c.Postgres.SSLMode == "" {
+		c.Postgres.SSLMode = defaultPostgresSSLMode
 	}
 	if c.Redis.Port == 0 {
 		c.Redis.Port = defaultRedisPort
@@ -198,11 +289,47 @@ func (c *Config) applyDefaults() {
 	if c.Milvus.Database == "" {
 		c.Milvus.Database = c.App.Name
 	}
+	if c.Milvus.Collection == "" {
+		c.Milvus.Collection = defaultMilvusCollection
+	}
+	if c.Embedding.Provider == "" {
+		c.Embedding.Provider = defaultEmbeddingProvider
+	}
+	if c.Embedding.BaseURL == "" {
+		c.Embedding.BaseURL = defaultEmbeddingBaseURL
+	}
+	if c.Embedding.Model == "" {
+		c.Embedding.Model = defaultEmbeddingModel
+	}
+	if c.Embedding.BatchSize == 0 {
+		c.Embedding.BatchSize = defaultEmbeddingBatchSize
+	}
+	if c.Retrieval.TopK == 0 {
+		c.Retrieval.TopK = defaultRetrievalTopK
+	}
 	if c.MinIO.Endpoint == "" {
 		c.MinIO.Endpoint = defaultMinIOEndpoint
 	}
 	if c.MinIO.Bucket == "" {
 		c.MinIO.Bucket = defaultMinIOBucket
+	}
+	if c.Postgres.MaxOpenConns == 0 {
+		c.Postgres.MaxOpenConns = defaultPostgresMaxOpenConns
+	}
+	if c.Postgres.MaxIdleConns == 0 {
+		c.Postgres.MaxIdleConns = defaultPostgresMaxIdleConns
+	}
+	if c.Postgres.ConnMaxLifetime == 0 {
+		c.Postgres.ConnMaxLifetime = Duration(defaultPostgresConnMaxLifetime)
+	}
+	if c.MinerU.BaseURL == "" {
+		c.MinerU.BaseURL = defaultMinerUBaseURL
+	}
+	if c.MinerU.Tier == "" {
+		c.MinerU.Tier = defaultMinerUTier
+	}
+	if c.MinerU.Timeout == 0 {
+		c.MinerU.Timeout = Duration(defaultMinerUTimeout)
 	}
 }
 
@@ -220,20 +347,26 @@ func (c *Config) applyEnvOverrides() {
 	if v, ok := envString("EINOFLOW_LOG_LEVEL"); ok {
 		c.Log.Level = v
 	}
-	if v, ok := envString("EINOFLOW_MYSQL_HOST"); ok {
-		c.MySQL.Host = v
+	if v, ok := envString("EINOFLOW_POSTGRES_HOST"); ok {
+		c.Postgres.Host = v
 	}
-	if v, ok := envInt("EINOFLOW_MYSQL_PORT"); ok {
-		c.MySQL.Port = v
+	if v, ok := envInt("EINOFLOW_POSTGRES_PORT"); ok {
+		c.Postgres.Port = v
 	}
-	if v, ok := envString("EINOFLOW_MYSQL_USER"); ok {
-		c.MySQL.User = v
+	if v, ok := envString("EINOFLOW_POSTGRES_USER"); ok {
+		c.Postgres.User = v
 	}
-	if v, ok := envString("EINOFLOW_MYSQL_PASSWORD"); ok {
-		c.MySQL.Password = v
+	if v, ok := envString("EINOFLOW_POSTGRES_PASSWORD"); ok {
+		c.Postgres.Password = v
 	}
-	if v, ok := envString("EINOFLOW_MYSQL_DATABASE"); ok {
-		c.MySQL.Database = v
+	if v, ok := envString("EINOFLOW_POSTGRES_DATABASE"); ok {
+		c.Postgres.Database = v
+	}
+	if v, ok := envString("EINOFLOW_POSTGRES_SSLMODE"); ok {
+		c.Postgres.SSLMode = v
+	}
+	if v, ok := envBool("EINOFLOW_POSTGRES_AUTO_MIGRATE"); ok {
+		c.Postgres.AutoMigrate = v
 	}
 	if v, ok := envString("EINOFLOW_REDIS_HOST"); ok {
 		c.Redis.Host = v
@@ -259,6 +392,24 @@ func (c *Config) applyEnvOverrides() {
 	if v, ok := envString("EINOFLOW_MILVUS_DATABASE"); ok {
 		c.Milvus.Database = v
 	}
+	if v, ok := envString("EINOFLOW_MILVUS_COLLECTION"); ok {
+		c.Milvus.Collection = v
+	}
+	if v, ok := envString("EINOFLOW_EMBEDDING_PROVIDER"); ok {
+		c.Embedding.Provider = v
+	}
+	if v, ok := envString("EINOFLOW_EMBEDDING_BASE_URL"); ok {
+		c.Embedding.BaseURL = v
+	}
+	if v, ok := envString("EINOFLOW_EMBEDDING_MODEL"); ok {
+		c.Embedding.Model = v
+	}
+	if v, ok := envInt("EINOFLOW_EMBEDDING_BATCH_SIZE"); ok {
+		c.Embedding.BatchSize = v
+	}
+	if v, ok := envInt("EINOFLOW_RETRIEVAL_TOP_K"); ok {
+		c.Retrieval.TopK = v
+	}
 	if v, ok := envString("EINOFLOW_MINIO_ENDPOINT"); ok {
 		c.MinIO.Endpoint = v
 	}
@@ -274,6 +425,15 @@ func (c *Config) applyEnvOverrides() {
 	if v, ok := envBool("EINOFLOW_MINIO_USE_SSL"); ok {
 		c.MinIO.UseSSL = v
 	}
+	if v, ok := envString("EINOFLOW_MINERU_BASE_URL"); ok {
+		c.MinerU.BaseURL = v
+	}
+	if v, ok := envString("EINOFLOW_MINERU_TOKEN"); ok {
+		c.MinerU.Token = v
+	}
+	if v, ok := envString("EINOFLOW_MINERU_TIER"); ok {
+		c.MinerU.Tier = v
+	}
 }
 
 // validate 做基础合法性校验，尽早暴露配置错误。
@@ -281,20 +441,36 @@ func (c *Config) validate() error {
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port 不合法: %d", c.Server.Port)
 	}
-	if c.MySQL.Host == "" {
-		return fmt.Errorf("mysql.host 不能为空")
+	if c.Postgres.Host == "" {
+		return fmt.Errorf("postgres.host 不能为空")
 	}
-	if c.MySQL.User == "" {
-		return fmt.Errorf("mysql.user 不能为空")
+	if c.Postgres.User == "" {
+		return fmt.Errorf("postgres.user 不能为空")
 	}
-	if c.MySQL.Database == "" {
-		return fmt.Errorf("mysql.database 不能为空")
+	if c.Postgres.Database == "" {
+		return fmt.Errorf("postgres.database 不能为空")
 	}
 	if c.Milvus.Address == "" {
 		return fmt.Errorf("milvus.address 不能为空")
 	}
 	if c.MinIO.Endpoint == "" {
 		return fmt.Errorf("minio.endpoint 不能为空")
+	}
+	if c.MinerU.BaseURL == "" {
+		return fmt.Errorf("mineru.base_url 不能为空")
+	}
+	if c.Milvus.Collection == "" {
+		return fmt.Errorf("milvus.collection 不能为空")
+	}
+	if c.Embedding.Model == "" {
+		return fmt.Errorf("embedding.model 不能为空")
+	}
+	if c.Embedding.BaseURL == "" {
+		return fmt.Errorf("embedding.base_url 不能为空")
+	}
+	if c.Retrieval.TopK <= 0 || c.Retrieval.TopK > model.MaxRetrievalTopK {
+		return fmt.Errorf("retrieval.top_k 必须在 1..%d 之间，当前为 %d",
+			model.MaxRetrievalTopK, c.Retrieval.TopK)
 	}
 	return nil
 }
@@ -333,3 +509,23 @@ func envBool(key string) (bool, bool) {
 	}
 	return parsed, true
 }
+
+// Duration 让 YAML 配置可以写 "1h"、"30m" 这类时长，解析后等价于 time.Duration。
+type Duration time.Duration
+
+// UnmarshalYAML 实现 yaml.Unmarshaler。
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	var raw string
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil {
+		return fmt.Errorf("解析时长 %q 失败: %w", raw, err)
+	}
+	*d = Duration(parsed)
+	return nil
+}
+
+// Std 返回标准库的 time.Duration。
+func (d Duration) Std() time.Duration { return time.Duration(d) }
