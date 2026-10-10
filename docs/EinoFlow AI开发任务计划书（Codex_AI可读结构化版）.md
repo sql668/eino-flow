@@ -46,7 +46,7 @@
 
 - AI 内核：CloudWeGo Eino（Graph/Workflow/ReAct/Agent/Memory）
 
-- 数据库：MySQL（业务数据）
+- 数据库：PostgreSQL（业务数据）
 
 - 向量库：Milvus（RAG 检索）
 
@@ -274,7 +274,7 @@
 
 - 所有工作流运行必须通过「前端DSL \-\> 后端解析 \-\> 动态Eino Graph」流程
 
-- 所有配置持久化到 MySQL，禁止硬编码
+- 所有配置持久化到 PostgreSQL，禁止硬编码
 
 - 严格按照三阶段开发，不提前开发高阶功能
 

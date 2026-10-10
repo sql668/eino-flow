@@ -14,7 +14,7 @@ EinoFlow：基于字节CloudWeGo Eino内核的**高性能可扩展AI智能体工
 
 **后端**：Golang \+ CloudWeGo Eino（编排内核）\+ Hertz（HTTP服务）
 
-**中间件/存储**：MySQL（业务配置）\+ Milvus（向量检索）\+ MinIO（文件存储）\+ Redis（缓存/会话）
+**中间件/存储**：PostgreSQL（业务配置）\+ Milvus（向量检索）\+ MinIO（文件存储）\+ Redis（缓存/会话）
 
 **可观测/扩展**：OpenTelemetry全链路追踪 \+ 自定义插件市场 \+ MCP协议工具适配层
 
@@ -180,7 +180,7 @@ EinoFlow 是一款低代码AI智能体与工作流搭建平台，支持用户通
 
 2. 后端：Hertz流式对话接口、知识库基础入库\+检索能力
 
-3. 后端：MySQL基础表（应用表、知识库表、对话记录表）
+3. 后端：PostgreSQL基础表（应用表、知识库表、对话记录表）
 
 4. 前端Next基础页面：登录、应用列表、知识库管理、对话调试页
 
