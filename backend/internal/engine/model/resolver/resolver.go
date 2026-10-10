@@ -14,6 +14,8 @@ import (
 
 	"einoflow-backend/internal/engine/model"
 	"einoflow-backend/internal/engine/model/ollama"
+	"einoflow-backend/internal/engine/model/providers"
+	domainmodel "einoflow-backend/internal/model"
 )
 
 // 支持的厂商标识。
@@ -34,11 +36,20 @@ type Options struct {
 	EmbeddingModel string
 	// EmbeddingBatchSize 是单次请求的文本条数，<=0 用默认值。
 	EmbeddingBatchSize int
+	// RerankProvider / RerankBaseURL / RerankModel 是重排模型的兜底配置。
+	// RerankModel 为空表示「没有配置重排」，此时 Reranker 返回 ErrNotConfigured，
+	// 调用方据此跳过重排而不是把检索判为失败。
+	RerankProvider string
+	RerankBaseURL  string
+	RerankModel    string
 }
 
 // ConfigResolver 实现 model.Resolver。
 type ConfigResolver struct {
 	embedder model.Embedder
+	reranker model.Reranker
+	// rerankErr 记录重排不可用的原因（未配置 / 厂商不支持），调用时原样返回。
+	rerankErr error
 }
 
 // New 构造解析器，并**在构造时完成可用性校验**。
@@ -51,7 +62,8 @@ func New(ctx context.Context, opts Options) (*ConfigResolver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ConfigResolver{embedder: embedder}, nil
+	reranker, rerankErr := newReranker(opts)
+	return &ConfigResolver{embedder: embedder, reranker: reranker, rerankErr: rerankErr}, nil
 }
 
 // Embedder 实现 model.Resolver。
@@ -60,6 +72,14 @@ func New(ctx context.Context, opts Options) (*ConfigResolver, error) {
 // 需要覆盖能力时请用 DatabaseResolver（它会按作用域解析，并把它作为兜底）。
 func (r *ConfigResolver) Embedder(context.Context, model.ScopeRef) (model.Embedder, error) {
 	return r.embedder, nil
+}
+
+// Reranker 实现 model.Resolver。
+func (r *ConfigResolver) Reranker(context.Context, model.ScopeRef) (model.Reranker, error) {
+	if r.rerankErr != nil {
+		return nil, r.rerankErr
+	}
+	return r.reranker, nil
 }
 
 // newEmbedder 按厂商标识构造向量化模型并探测维度。
@@ -88,4 +108,36 @@ func newEmbedder(ctx context.Context, opts Options) (model.Embedder, error) {
 		return nil, fmt.Errorf("不支持的 embedding 厂商 %q（已支持: %s）",
 			opts.EmbeddingProvider, strings.Join(supportedProviders, ", "))
 	}
+}
+
+// newReranker 按厂商标识构造重排模型。
+//
+// 与向量化不同，这里**不做启动期探测**：边车可能比后端晚就绪（首次还要下载模型），
+// 在启动时硬校验会让「先起后端、再起边车」这个正常顺序变成启动失败。
+// 边车是否真的加载了目标模型，由配置页的「测试连接」负责呈现。
+func newReranker(opts Options) (model.Reranker, error) {
+	modelName := strings.TrimSpace(opts.RerankModel)
+	if modelName == "" {
+		return nil, fmt.Errorf("%w: 未配置重排模型（可在「模型配置」里添加 TEI 模型并设为默认）",
+			model.ErrNotConfigured)
+	}
+
+	provider := strings.ToLower(strings.TrimSpace(opts.RerankProvider))
+	plugin, err := providers.Get(provider)
+	if err != nil {
+		return nil, fmt.Errorf("%w（重排配置里的 provider）: %s", model.ErrNotConfigured, err.Error())
+	}
+	if !providers.Supports(plugin, domainmodel.ModelTypeRerank) {
+		return nil, fmt.Errorf("%w: 厂商 %s 不支持重排", model.ErrRerankUnsupported, plugin.DisplayName())
+	}
+
+	reranker, err := plugin.NewReranker(providers.Config{
+		Provider:  plugin.ID(),
+		BaseURL:   opts.RerankBaseURL,
+		ModelName: modelName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("构造重排模型失败: %w", err)
+	}
+	return reranker, nil
 }

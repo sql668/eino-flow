@@ -26,6 +26,11 @@ type searchRequest struct {
 	Query string `json:"query"`
 	// TopK 不传（或传 0）时用配置里的默认值。
 	TopK int `json:"topK"`
+	// CandidateTopK 是重排前的召回条数，不传时用配置里的默认值。
+	CandidateTopK int `json:"candidateTopK"`
+	// Rerank 不传时按默认策略（配了重排模型就启用）；
+	// 传 true / false 可直接对比「开重排 / 关重排」的结果差异。
+	Rerank *bool `json:"rerank"`
 }
 
 // searchHitResponse 是单个命中片段。
@@ -33,27 +38,34 @@ type searchRequest struct {
 // 溯源字段（page / locator / titlePath）与内容一起返回，是「检索可追溯」这条需求（D6）的对外形态：
 // 使用者不仅能看到命中了什么，还能知道它来自哪一页、哪一个标题下。
 type searchHitResponse struct {
-	SegmentID    uint64   `json:"segmentId"`
-	DocumentID   uint64   `json:"documentId"`
-	DocumentName string   `json:"documentName"`
-	Rank         int      `json:"rank"`
-	Score        float32  `json:"score"`
-	Content      string   `json:"content"`
-	ChunkIndex   int      `json:"chunkIndex"`
-	Page         int      `json:"page"`
-	Locator      string   `json:"locator"`
-	Kind         string   `json:"kind"`
-	TitlePath    []string `json:"titlePath"`
+	SegmentID    uint64 `json:"segmentId"`
+	DocumentID   uint64 `json:"documentId"`
+	DocumentName string `json:"documentName"`
+	Rank         int    `json:"rank"`
+	// VectorScore 与 RerankScore 都返回：使用者才能看出重排把哪条提了上来。
+	VectorScore float32  `json:"vectorScore"`
+	RerankScore *float32 `json:"rerankScore,omitempty"`
+	Content     string   `json:"content"`
+	ChunkIndex  int      `json:"chunkIndex"`
+	Page        int      `json:"page"`
+	Locator     string   `json:"locator"`
+	Kind        string   `json:"kind"`
+	TitlePath   []string `json:"titlePath"`
 }
 
 type searchResponse struct {
 	// RunID 是本次检索的留痕记录 ID，便于事后按 ID 复查这次检索。
-	RunID          uint64              `json:"runId"`
-	Query          string              `json:"query"`
-	TopK           int                 `json:"topK"`
-	EmbeddingModel string              `json:"embeddingModel"`
-	LatencyMS      int                 `json:"latencyMs"`
-	Hits           []searchHitResponse `json:"hits"`
+	RunID          uint64 `json:"runId"`
+	Query          string `json:"query"`
+	TopK           int    `json:"topK"`
+	EmbeddingModel string `json:"embeddingModel"`
+	// RerankModel 为空表示本次未做重排，原因见 rerankSkipped。
+	RerankModel   string `json:"rerankModel"`
+	RerankSkipped string `json:"rerankSkipped,omitempty"`
+	// Recalled 是重排前的召回条数，用于展示「召回 N 条 → 重排后留 M 条」。
+	Recalled  int                 `json:"recalled"`
+	LatencyMS int                 `json:"latencyMs"`
+	Hits      []searchHitResponse `json:"hits"`
 }
 
 func (h *searchHandler) search(ctx context.Context, c *app.RequestContext) {
@@ -69,9 +81,11 @@ func (h *searchHandler) search(ctx context.Context, c *app.RequestContext) {
 	}
 
 	result, err := h.searches.Search(ctx, service.SearchInput{
-		DatasetID: datasetID,
-		Query:     req.Query,
-		TopK:      req.TopK,
+		DatasetID:     datasetID,
+		Query:         req.Query,
+		TopK:          req.TopK,
+		CandidateTopK: req.CandidateTopK,
+		Rerank:        req.Rerank,
 	})
 	if err != nil {
 		writeServiceError(c, err)
@@ -85,7 +99,8 @@ func (h *searchHandler) search(ctx context.Context, c *app.RequestContext) {
 			DocumentID:   hit.DocumentID,
 			DocumentName: hit.DocumentName,
 			Rank:         hit.Rank,
-			Score:        hit.Score,
+			VectorScore:  hit.VectorScore,
+			RerankScore:  hit.RerankScore,
 			Content:      hit.Content,
 			ChunkIndex:   hit.ChunkIndex,
 			Page:         hit.Page,
@@ -100,6 +115,9 @@ func (h *searchHandler) search(ctx context.Context, c *app.RequestContext) {
 		Query:          result.Query,
 		TopK:           result.TopK,
 		EmbeddingModel: result.EmbeddingModel,
+		RerankModel:    result.RerankModel,
+		RerankSkipped:  result.RerankSkipped,
+		Recalled:       result.Recalled,
 		LatencyMS:      result.LatencyMS,
 		Hits:           hits,
 	}))

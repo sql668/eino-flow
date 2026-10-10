@@ -40,7 +40,7 @@ func registerModelConfigRoutes(group *route.RouterGroup, config *service.ModelCo
 	group.PUT("/model/bindings", h.bindModel)
 	group.DELETE("/model/bindings", h.unbindModel)
 
-	group.GET("/model/effective", h.effectiveEmbedding)
+	group.GET("/model/effective", h.effectiveModel)
 }
 
 // providerResponse 是厂商的对外结构。
@@ -417,10 +417,15 @@ func (h *modelConfigHandler) unbindModel(ctx context.Context, c *app.RequestCont
 	c.JSON(consts.StatusOK, OK(nil))
 }
 
-func (h *modelConfigHandler) effectiveEmbedding(ctx context.Context, c *app.RequestContext) {
+func (h *modelConfigHandler) effectiveModel(ctx context.Context, c *app.RequestContext) {
 	appID, _ := strconv.ParseUint(c.Query("appId"), 10, 64)
 	datasetID, _ := strconv.ParseUint(c.Query("datasetId"), 10, 64)
-	effective, err := h.config.EffectiveEmbedding(ctx, appID, datasetID)
+	// 默认查向量化模型：它是当前唯一被检索链路真正消费的模型类型。
+	kind := model.ModelType(c.Query("type"))
+	if kind == "" {
+		kind = model.ModelTypeEmbedding
+	}
+	effective, err := h.config.EffectiveModel(ctx, kind, appID, datasetID)
 	if err != nil {
 		writeServiceError(c, err)
 		return

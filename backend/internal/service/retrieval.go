@@ -26,6 +26,11 @@ type SearchInput struct {
 	Query     string
 	// TopK 为 0 时用配置里的默认值。
 	TopK int
+	// CandidateTopK 为 0 时用配置里的默认值（重排前的召回条数）。
+	CandidateTopK int
+	// Rerank 为 nil 时按默认策略（配了重排模型就启用），
+	// 显式传 true / false 用于对比两阶段检索的效果。
+	Rerank *bool
 }
 
 // SearchResult 是检索结果。
@@ -35,8 +40,13 @@ type SearchResult struct {
 	Query          string
 	TopK           int
 	EmbeddingModel string
-	LatencyMS      int
-	Hits           []rag.Hit
+	// RerankModel 为空表示本次未做重排；RerankSkipped 说明原因。
+	RerankModel   string
+	RerankSkipped string
+	// Recalled 是重排前的召回条数。
+	Recalled  int
+	LatencyMS int
+	Hits      []rag.Hit
 }
 
 // Retriever 是检索能力的抽象。
@@ -102,6 +112,10 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 	if topK > model.MaxRetrievalTopK {
 		return nil, fmt.Errorf("%w: topK 最大为 %d", ErrInvalidInput, model.MaxRetrievalTopK)
 	}
+	candidateTopK := input.CandidateTopK
+	if candidateTopK > model.MaxCandidateTopK {
+		return nil, fmt.Errorf("%w: candidateTopK 最大为 %d", ErrInvalidInput, model.MaxCandidateTopK)
+	}
 
 	// 先确认知识库存在：否则「知识库不存在」会表现为「搜不到东西」，
 	// 使用者会去怀疑检索质量而不会想到是 ID 写错。
@@ -111,9 +125,11 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 
 	started := time.Now()
 	output, err := s.retriever.Retrieve(ctx, rag.RetrieveRequest{
-		DatasetID: input.DatasetID,
-		Query:     query,
-		TopK:      topK,
+		DatasetID:     input.DatasetID,
+		Query:         query,
+		TopK:          topK,
+		CandidateTopK: candidateTopK,
+		Rerank:        input.Rerank,
 	})
 	latency := time.Since(started)
 
@@ -121,6 +137,9 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 		Query:          query,
 		TopK:           topK,
 		EmbeddingModel: output.EmbeddingModel,
+		RerankModel:    output.RerankModel,
+		RerankSkipped:  output.RerankSkipped,
+		Recalled:       len(output.Candidates),
 		LatencyMS:      int(latency.Milliseconds()),
 		Hits:           output.Hits,
 	}
@@ -149,11 +168,18 @@ func (s *RetrievalService) recordTrace(
 	output rag.RetrieveOutput,
 	retrieveErr error,
 ) (uint64, error) {
+	// 召回条数取候选数量；没走重排时候选就等于命中，两者一致。
+	recalled := len(output.Candidates)
+	if recalled == 0 {
+		recalled = len(output.Hits)
+	}
 	run := &model.RetrievalRun{
 		DatasetID:      datasetID,
 		Query:          query,
 		TopK:           topK,
+		CandidateCount: recalled,
 		EmbeddingModel: output.EmbeddingModel,
+		RerankModel:    output.RerankModel,
 		LatencyMS:      int(latency.Milliseconds()),
 		HitCount:       len(output.Hits),
 	}
@@ -164,20 +190,39 @@ func (s *RetrievalService) recordTrace(
 		return 0, err
 	}
 
-	if len(output.Hits) == 0 {
+	if len(output.Hits) == 0 && recalled == 0 {
 		return run.ID, nil
 	}
 
-	hits := make([]*model.RetrievalHit, 0, len(output.Hits))
-	for _, hit := range output.Hits {
+	// 两阶段都留痕（见 D6）：先记召回阶段的全部候选，再记重排阶段的最终结果。
+	// 只记最终结果的话，「重排把哪条提上来、把哪条压下去」就无从回溯。
+	hits := make([]*model.RetrievalHit, 0, len(output.Candidates)+len(output.Hits))
+	for _, hit := range output.Candidates {
 		hits = append(hits, &model.RetrievalHit{
 			RunID:      run.ID,
 			DatasetID:  datasetID,
 			SegmentID:  hit.SegmentID,
 			DocumentID: hit.DocumentID,
 			Rank:       hit.Rank,
-			Score:      hit.Score,
+			Score:      hit.VectorScore,
 			Stage:      model.RetrievalStageVector,
+		})
+	}
+	for _, hit := range output.Hits {
+		if hit.RerankScore == nil {
+			// 未做重排（被关闭或未配置）时不写 rerank 阶段：
+			// 写一条 rerank_score 为空的记录会让人误以为「重排跑了却没给分」。
+			continue
+		}
+		hits = append(hits, &model.RetrievalHit{
+			RunID:       run.ID,
+			DatasetID:   datasetID,
+			SegmentID:   hit.SegmentID,
+			DocumentID:  hit.DocumentID,
+			Rank:        hit.Rank,
+			Score:       hit.VectorScore,
+			RerankScore: hit.RerankScore,
+			Stage:       model.RetrievalStageRerank,
 		})
 	}
 	if err := s.traces.CreateHits(ctx, hits); err != nil {

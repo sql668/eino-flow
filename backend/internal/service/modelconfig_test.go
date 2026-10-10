@@ -301,13 +301,13 @@ type stubResolver struct {
 	invalidatd int
 }
 
-func (r *stubResolver) EmbedderFor(
-	context.Context, enginemodel.ScopeRef,
-) (resolver.EffectiveEmbedder, error) {
+func (r *stubResolver) Effective(
+	_ context.Context, _ model.ModelType, _ enginemodel.ScopeRef,
+) (resolver.EffectiveModel, error) {
 	if r.err != nil {
-		return resolver.EffectiveEmbedder{}, r.err
+		return resolver.EffectiveModel{}, r.err
 	}
-	return resolver.EffectiveEmbedder{EffectiveModel: r.effective}, nil
+	return r.effective, nil
 }
 
 func (r *stubResolver) Invalidate() { r.invalidatd++ }
@@ -620,7 +620,7 @@ func TestEffectiveEmbedding(t *testing.T) {
 		Dimension: 1024, Scope: model.ModelScopeGlobal,
 	}
 
-	effective, err := fixture.service.EffectiveEmbedding(context.Background(), 0, 2)
+	effective, err := fixture.service.EffectiveModel(context.Background(), model.ModelTypeEmbedding, 0, 2)
 	if err != nil {
 		t.Fatalf("查询生效模型失败: %v", err)
 	}
@@ -631,7 +631,14 @@ func TestEffectiveEmbedding(t *testing.T) {
 	// 未配置任何模型时：应返回「未配置」类错误而不是空结果，
 	// 否则前端会显示成「已就绪但模型是空的」。
 	fixture.resolver.err = enginemodel.ErrNotConfigured
-	if _, err := fixture.service.EffectiveEmbedding(context.Background(), 0, 0); err == nil {
+	if _, err := fixture.service.EffectiveModel(
+		context.Background(), model.ModelTypeEmbedding, 0, 0); err == nil {
 		t.Fatal("未配置模型时应报错")
+	}
+
+	// 类型非法要在服务层挡掉，而不是把空类型透传给解析器。
+	if _, err := fixture.service.EffectiveModel(
+		context.Background(), model.ModelType("speech"), 0, 0); !errors.Is(err, service.ErrInvalidInput) {
+		t.Fatalf("非法类型错误 = %v, 期望 ErrInvalidInput", err)
 	}
 }

@@ -23,6 +23,11 @@ var (
 	// ErrDimensionMismatch 表示模型输出维度与已建索引不一致。
 	// 这种情况必须显式失败：维度不匹配的向量写进索引后，检索结果会变成一堆噪声，且极难排查。
 	ErrDimensionMismatch = errors.New("向量维度与索引不一致")
+	// ErrRerankUnsupported 表示该厂商不提供重排能力。
+	//
+	// 单独一个错误而不是复用 ErrNotConfigured：两者修法不同——
+	// 「没配」要去配置页填，「不支持」得换厂商（实测 Ollama 就没有 rerank 端点）。
+	ErrRerankUnsupported = errors.New("该厂商不支持重排")
 )
 
 // Embedder 把文本转换为向量。
@@ -34,6 +39,17 @@ type Embedder interface {
 	Dimension() int
 	// Embed 批量向量化。返回结果与入参一一对应，顺序一致。
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
+}
+
+// Reranker 对候选文档按与查询的相关性重新打分。
+//
+// 返回值与入参**下标一一对应**（不做排序）：排序是调用方的职责。
+// 这样接口只描述「打分」这一件事，调用方既能拿到分数排序，也能把分数落库留痕。
+type Reranker interface {
+	// Name 返回模型标识（例如 BAAI/bge-reranker-v2-m3）。
+	Name() string
+	// Rerank 返回与 documents 等长的相关性分数，分数越大越相关。
+	Rerank(ctx context.Context, query string, documents []string) ([]float32, error)
 }
 
 // ScopeRef 指定「为谁解析模型」。
@@ -55,4 +71,9 @@ type Resolver interface {
 	// 带 scope 而不是无参：知识库可以用自己的向量模型（同 Dify），
 	// 而入库与检索必须用**同一个**模型，否则两边向量不在同一空间，检索会退化成噪声。
 	Embedder(ctx context.Context, scope ScopeRef) (Embedder, error)
+	// Reranker 返回该作用域下生效的重排模型。
+	//
+	// 未配置时返回 ErrNotConfigured：调用方据此**跳过重排并说明原因**，
+	// 而不是把「没配重排」当成检索失败。
+	Reranker(ctx context.Context, scope ScopeRef) (Reranker, error)
 }

@@ -179,6 +179,14 @@ func (r *fallbackResolver) Embedder(
 	return fakeEmbedder{name: r.name}, nil
 }
 
+// Reranker 模拟配置文件里没配重排：返回 ErrNotConfigured。
+func (r *fallbackResolver) Reranker(
+	context.Context, enginemodel.ScopeRef,
+) (enginemodel.Reranker, error) {
+	r.calls++
+	return nil, enginemodel.ErrNotConfigured
+}
+
 type fakeEmbedder struct{ name string }
 
 func (f fakeEmbedder) Name() string   { return f.name }
@@ -393,5 +401,78 @@ func TestDatabaseResolver_CredentialErrors(t *testing.T) {
 	}
 	if errors.Is(err, enginemodel.ErrNotConfigured) {
 		t.Error("解密失败不应被当成「未配置」")
+	}
+}
+
+// TestDatabaseResolver_Rerank 覆盖重排的解析与三级覆盖。
+func TestDatabaseResolver_Rerank(t *testing.T) {
+	server, _ := fakeOllama(t, testDim) // 仅用于 embedding 场景，这里不触发
+	data := newStore()
+	providerID := data.addProvider("tei", "http://127.0.0.1:8080", true)
+	globalID := data.addInstance(providerID, "BAAI/bge-reranker-v2-m3", model.ModelTypeRerank, true)
+	datasetID := data.addInstance(providerID, "BAAI/bge-reranker-base", model.ModelTypeRerank, true)
+	data.bind(model.ModelScopeGlobal, 0, 0, model.ModelTypeRerank, globalID)
+	data.bind(model.ModelScopeDataset, 0, 2, model.ModelTypeRerank, datasetID)
+
+	instance := newResolver(t, data, nil)
+	ctx := context.Background()
+
+	effective, err := instance.RerankerFor(ctx, enginemodel.ScopeRef{})
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if effective.ModelName != "BAAI/bge-reranker-v2-m3" || effective.Scope != model.ModelScopeGlobal {
+		t.Fatalf("全局解析不符: %+v", effective.EffectiveModel)
+	}
+	// 重排不该有维度概念：向量维度只对向量化模型有意义。
+	if effective.Dimension != 0 {
+		t.Errorf("重排模型的维度应为 0，实际 %d", effective.Dimension)
+	}
+
+	effective, err = instance.RerankerFor(ctx, enginemodel.ScopeRef{DatasetID: 2})
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if effective.ModelName != "BAAI/bge-reranker-base" || effective.Scope != model.ModelScopeDataset {
+		t.Fatalf("知识库覆盖不符: %+v", effective.EffectiveModel)
+	}
+
+	// 未配置重排时必须是 ErrNotConfigured：调用方据此跳过重排而不是让检索失败。
+	empty := newStore()
+	if _, err := newResolver(t, empty, &fallbackResolver{name: "config"}).RerankerFor(
+		ctx, enginemodel.ScopeRef{}); !errors.Is(err, enginemodel.ErrNotConfigured) {
+		t.Fatalf("未配置时的错误 = %v, 期望 ErrNotConfigured", err)
+	}
+
+	_ = server
+}
+
+// TestDatabaseResolver_EffectiveByKind 覆盖按类型取生效模型，
+// 以及「对话模型尚未接入」这类明确拒绝。
+func TestDatabaseResolver_EffectiveByKind(t *testing.T) {
+	data := newStore()
+	providerID := data.addProvider("tei", "http://127.0.0.1:8080", true)
+	instanceID := data.addInstance(providerID, "BAAI/bge-reranker-v2-m3", model.ModelTypeRerank, true)
+	data.bind(model.ModelScopeGlobal, 0, 0, model.ModelTypeRerank, instanceID)
+
+	instance := newResolver(t, data, nil)
+	ctx := context.Background()
+
+	effective, err := instance.Effective(ctx, model.ModelTypeRerank, enginemodel.ScopeRef{})
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if effective.ModelType != model.ModelTypeRerank {
+		t.Errorf("类型 = %s, 期望 rerank", effective.ModelType)
+	}
+
+	// 对话模型没有消费方：必须明确报「未接入」，而不是回一个空模型让界面显示成已就绪。
+	_, err = instance.Effective(ctx, model.ModelTypeLLM, enginemodel.ScopeRef{})
+	if err == nil || !strings.Contains(err.Error(), "尚未接入") {
+		t.Fatalf("错误 = %v, 期望提示对话模型尚未接入", err)
+	}
+
+	if _, err := instance.Effective(ctx, model.ModelType("speech"), enginemodel.ScopeRef{}); err == nil {
+		t.Fatal("未知类型应报错")
 	}
 }

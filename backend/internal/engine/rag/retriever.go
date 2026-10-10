@@ -2,7 +2,9 @@ package rag
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"einoflow-backend/internal/engine/model"
@@ -13,8 +15,14 @@ import (
 type RetrieveRequest struct {
 	DatasetID uint64
 	Query     string
-	// TopK <= 0 时用默认值。
+	// TopK 是最终返回条数，<=0 时用默认值。
 	TopK int
+	// CandidateTopK 是重排前的向量召回条数，<=0 时用默认值。
+	// 必须 >= TopK：召回比最终结果还少，重排就没有可挑的余地。
+	CandidateTopK int
+	// Rerank 为 nil 表示按默认策略（配了重排模型就用），
+	// true / false 用于显式开关——页面上的「开/关重排对比」就靠它。
+	Rerank *bool
 }
 
 // Hit 是一个命中片段，带齐前端展示引用所需的溯源信息。
@@ -29,21 +37,33 @@ type Hit struct {
 	Content      string
 	// Rank 是本次检索内的排名，从 1 开始。
 	Rank int
-	// Score 是向量相似度（余弦，越大越相似）。展示分数是为了让使用者能判断召回质量。
-	Score      float32
-	ChunkIndex int
-	Page       int
-	Locator    string
-	Kind       string
-	TitlePath  []string
+	// VectorScore 是向量相似度（余弦，越大越相似）。
+	// 两个分数都返回而不是只返回最终分：使用者才能判断「重排把哪一条提上来了」，
+	// 这也是「检索可追溯」要展示的内容之一。
+	VectorScore float32
+	// RerankScore 是重排分数；未做重排时为空。
+	RerankScore *float32
+	ChunkIndex  int
+	Page        int
+	Locator     string
+	Kind        string
+	TitlePath   []string
 }
 
 // RetrieveOutput 是一次检索的结果。
 type RetrieveOutput struct {
 	Hits []Hit
+	// Candidates 是召回阶段的全部候选（按向量分数排序），
+	// 用于把「召回 → 重排」的完整过程落库留痕（见 D6）。
+	Candidates []Hit
 	// EmbeddingModel 是本次使用的向量模型。
 	// 检索记录要落库（见 docs/PROGRESS.md D6），换模型后要能解释「为什么结果变了」。
 	EmbeddingModel string
+	// RerankModel 是本次使用的重排模型；未做重排时为空。
+	RerankModel string
+	// RerankSkipped 记录「为什么没做重排」（未配置 / 被显式关闭）。
+	// 不记录的话，「结果没变」会被误判成「重排没效果」。
+	RerankSkipped string
 }
 
 // Retriever 执行「问题 → 向量 → 命中片段」的检索。
@@ -56,23 +76,32 @@ type Retriever struct {
 	segments repository.SegmentRepository
 	// defaultTopK 是请求未指定 top_k 时的兜底值。
 	defaultTopK int
+	// defaultCandidateTopK 是请求未指定召回条数时的兜底值。
+	defaultCandidateTopK int
+	// rerankEnabled 是默认策略：配了重排模型是否直接使用。
+	rerankEnabled bool
 }
 
 // RetrieverDeps 是检索器依赖。
 type RetrieverDeps struct {
-	Models      model.Resolver
-	Vectors     repository.VectorStore
-	Segments    repository.SegmentRepository
-	DefaultTopK int
+	Models               model.Resolver
+	Vectors              repository.VectorStore
+	Segments             repository.SegmentRepository
+	DefaultTopK          int
+	DefaultCandidateTopK int
+	// RerankEnabled 为 true 时，未显式指定就默认执行重排。
+	RerankEnabled bool
 }
 
 // NewRetriever 构造检索器。
 func NewRetriever(deps RetrieverDeps) *Retriever {
 	return &Retriever{
-		models:      deps.Models,
-		vectors:     deps.Vectors,
-		segments:    deps.Segments,
-		defaultTopK: deps.DefaultTopK,
+		models:               deps.Models,
+		vectors:              deps.Vectors,
+		segments:             deps.Segments,
+		defaultTopK:          deps.DefaultTopK,
+		defaultCandidateTopK: deps.DefaultCandidateTopK,
+		rerankEnabled:        deps.RerankEnabled,
 	}
 }
 
@@ -89,6 +118,14 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 	topK := req.TopK
 	if topK <= 0 {
 		topK = r.defaultTopK
+	}
+	candidateTopK := req.CandidateTopK
+	if candidateTopK <= 0 {
+		candidateTopK = r.defaultCandidateTopK
+	}
+	if candidateTopK < topK {
+		// 召回少于最终条数时按最终条数召回：宁可多召回一次，也不要返回不足条数的结果。
+		candidateTopK = topK
 	}
 
 	// 用与入库同一个作用域解析模型：知识库级覆盖必须两边一致，
@@ -108,11 +145,15 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 		return RetrieveOutput{}, fmt.Errorf("向量化检索内容返回了 %d 条向量，期望 1 条", len(vectors))
 	}
 
-	matches, err := r.vectors.Search(ctx, req.DatasetID, vectors[0], topK)
+	matches, err := r.vectors.Search(ctx, req.DatasetID, vectors[0], candidateTopK)
 	if err != nil {
 		return RetrieveOutput{}, err
 	}
-	output := RetrieveOutput{EmbeddingModel: embedder.Name(), Hits: []Hit{}}
+	output := RetrieveOutput{
+		EmbeddingModel: embedder.Name(),
+		Hits:           []Hit{},
+		Candidates:     []Hit{},
+	}
 	if len(matches) == 0 {
 		return output, nil
 	}
@@ -139,13 +180,13 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 			continue
 		}
 		segment := item.Segment
-		output.Hits = append(output.Hits, Hit{
+		output.Candidates = append(output.Candidates, Hit{
 			SegmentID:    segment.ID,
 			DocumentID:   segment.DocumentID,
 			DocumentName: item.DocumentName,
 			Content:      segment.Content,
-			Rank:         len(output.Hits) + 1,
-			Score:        match.Score,
+			Rank:         len(output.Candidates) + 1,
+			VectorScore:  match.Score,
 			ChunkIndex:   segment.ChunkIndex,
 			Page:         segment.Page,
 			Locator:      segment.Locator,
@@ -153,5 +194,82 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 			TitlePath:    segment.TitlePath,
 		})
 	}
+	if len(output.Candidates) == 0 {
+		return output, nil
+	}
+
+	// 第二阶段：重排。失败与「未配置」是两回事，必须分开处理。
+	shouldRerank := r.rerankEnabled
+	if req.Rerank != nil {
+		shouldRerank = *req.Rerank
+	}
+	if !shouldRerank {
+		output.RerankSkipped = "重排已被关闭"
+		output.Hits = topHits(output.Candidates, topK)
+		return output, nil
+	}
+
+	reranker, err := r.models.Reranker(ctx, model.ScopeRef{DatasetID: req.DatasetID})
+	if err != nil {
+		// 「没配重排」不是检索失败：跳过并用向量顺序返回，同时说明原因。
+		// 其它错误（比如绑定了但凭证解不开）必须暴露——那属于配置坏了。
+		if errors.Is(err, model.ErrNotConfigured) {
+			output.RerankSkipped = "未配置重排模型"
+			output.Hits = topHits(output.Candidates, topK)
+			return output, nil
+		}
+		return RetrieveOutput{}, err
+	}
+
+	texts := make([]string, 0, len(output.Candidates))
+	for _, hit := range output.Candidates {
+		texts = append(texts, hit.Content)
+	}
+	scores, err := reranker.Rerank(ctx, query, texts)
+	if err != nil {
+		// 调用重排失败不降级：静默返回向量顺序会让使用者以为「重排没效果」，
+		// 而实际上重排根本没跑，问题被掩盖了。
+		return RetrieveOutput{}, fmt.Errorf("重排失败: %w", err)
+	}
+	if len(scores) != len(output.Candidates) {
+		return RetrieveOutput{}, fmt.Errorf("重排返回的分数数量（%d）与候选数（%d）不一致",
+			len(scores), len(output.Candidates))
+	}
+
+	reranked := make([]Hit, 0, len(output.Candidates))
+	for i, hit := range output.Candidates {
+		score := scores[i]
+		hit.RerankScore = &score
+		reranked = append(reranked, hit)
+	}
+	// 按重排分数降序；分数相同时保持向量顺序，保证结果稳定可复现。
+	sort.SliceStable(reranked, func(i, j int) bool {
+		return derefFloat(reranked[i].RerankScore) > derefFloat(reranked[j].RerankScore)
+	})
+
+	output.RerankModel = reranker.Name()
+	output.Hits = topHits(reranked, topK)
 	return output, nil
+}
+
+// topHits 截取前 n 条并重排 Rank（Rank 必须是连续的 1..n）。
+func topHits(hits []Hit, n int) []Hit {
+	if n > len(hits) {
+		n = len(hits)
+	}
+	result := make([]Hit, 0, n)
+	for i := 0; i < n; i++ {
+		hit := hits[i]
+		hit.Rank = i + 1
+		result = append(result, hit)
+	}
+	return result
+}
+
+// derefFloat 读取可能为空的分数，空值按 0 处理（排序用）。
+func derefFloat(value *float32) float32 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }

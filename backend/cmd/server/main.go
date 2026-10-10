@@ -122,6 +122,9 @@ func main() {
 		EmbeddingBaseURL:   cfg.Embedding.BaseURL,
 		EmbeddingModel:     cfg.Embedding.Model,
 		EmbeddingBatchSize: cfg.Embedding.BatchSize,
+		RerankProvider:     cfg.Rerank.Provider,
+		RerankBaseURL:      cfg.Rerank.BaseURL,
+		RerankModel:        cfg.Rerank.Model,
 	})
 	if err != nil {
 		log.Fatalf("初始化兜底向量化模型失败: %v", err)
@@ -218,10 +221,12 @@ func main() {
 	})
 
 	retriever := rag.NewRetriever(rag.RetrieverDeps{
-		Models:      modelResolver,
-		Vectors:     vectorStore,
-		Segments:    segmentRepository,
-		DefaultTopK: cfg.Retrieval.TopK,
+		Models:               modelResolver,
+		Vectors:              vectorStore,
+		Segments:             segmentRepository,
+		DefaultTopK:          cfg.Retrieval.TopK,
+		DefaultCandidateTopK: cfg.Retrieval.CandidateTopK,
+		RerankEnabled:        cfg.Retrieval.RerankEnabled(),
 	})
 	retrievalService := service.NewRetrievalService(
 		datasetRepository,

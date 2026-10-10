@@ -2,11 +2,13 @@ package providers_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	enginemodel "einoflow-backend/internal/engine/model"
 	"einoflow-backend/internal/engine/model/providers"
 	"einoflow-backend/internal/model"
 )
@@ -197,7 +199,7 @@ func TestTEIProbe(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_, _ = w.Write([]byte(`{"model_id":"BAAI/bge-reranker-v2-m3","model_dtype":"float32"}`))
+		_, _ = w.Write([]byte(`{"model_id":"/data/models/BAAI/bge-reranker-v2-m3","model_dtype":"float32"}`))
 	}))
 	defer server.Close()
 
@@ -219,6 +221,20 @@ func TestTEIProbe(t *testing.T) {
 		}
 	})
 
+	t.Run("本地路径形式的模型名视为一致", func(t *testing.T) {
+		// 本项目用本地路径启动边车（绕开 TEI 自带下载器对 ETag 的要求），
+		// /info 会回报路径；这属于同一个模型，不能报「不一致」吓人。
+		result, err := plugin.Probe(ctx, providers.Config{
+			BaseURL: server.URL, ModelName: "BAAI/bge-reranker-v2-m3",
+		})
+		if err != nil {
+			t.Fatalf("探测失败: %v", err)
+		}
+		if !result.ModelAvailable {
+			t.Errorf("同名的本地路径应判定为一致: %+v", result)
+		}
+	})
+
 	t.Run("模型不一致", func(t *testing.T) {
 		// 这是「界面显示 A、实际跑 B」的现场，必须让使用者看见真实加载的模型名。
 		result, err := plugin.Probe(ctx, providers.Config{BaseURL: server.URL, ModelName: "其它模型"})
@@ -228,7 +244,7 @@ func TestTEIProbe(t *testing.T) {
 		if result.ModelAvailable {
 			t.Error("模型不一致时不应判定为可用")
 		}
-		if !strings.Contains(result.Message, "BAAI/bge-reranker-v2-m3") {
+		if !strings.Contains(result.Message, "/data/models/BAAI/bge-reranker-v2-m3") {
 			t.Errorf("提示未报出实际加载的模型: %s", result.Message)
 		}
 	})
@@ -240,4 +256,45 @@ func TestTEINewEmbedderRejected(t *testing.T) {
 	if _, err := plugin.NewEmbedder(providers.Config{ModelName: "x"}); err == nil {
 		t.Fatal("TEI 构造向量化实现应报错")
 	}
+}
+
+// TestRerankerFactories 覆盖重排实现的构造与拒绝：
+// 只有 TEI 能造出重排器，另两家必须给出可执行的替代方案。
+func TestRerankerFactories(t *testing.T) {
+	t.Run("TEI 可用", func(t *testing.T) {
+		plugin, _ := providers.Get("tei")
+		reranker, err := plugin.NewReranker(providers.Config{
+			BaseURL: "http://127.0.0.1:8080", ModelName: "BAAI/bge-reranker-v2-m3",
+		})
+		if err != nil {
+			t.Fatalf("构造失败: %v", err)
+		}
+		if reranker.Name() != "BAAI/bge-reranker-v2-m3" {
+			t.Errorf("Name = %q", reranker.Name())
+		}
+		// 没填模型名必须拒绝：没有目标模型就无从调用。
+		if _, err := plugin.NewReranker(providers.Config{}); err == nil {
+			t.Error("未指定模型名应报错")
+		}
+	})
+
+	t.Run("Ollama 拒绝并给出指引", func(t *testing.T) {
+		plugin, _ := providers.Get("ollama")
+		_, err := plugin.NewReranker(providers.Config{ModelName: "dengcao/bge-reranker-v2-m3:latest"})
+		if !errors.Is(err, enginemodel.ErrRerankUnsupported) {
+			t.Fatalf("错误 = %v, 期望 ErrRerankUnsupported", err)
+		}
+		// 只说「不支持」会让人反复试模型名；必须给出该做什么。
+		if !strings.Contains(err.Error(), "TEI") {
+			t.Errorf("错误信息未给出替代方案: %v", err)
+		}
+	})
+
+	t.Run("OpenAI 兼容接口拒绝", func(t *testing.T) {
+		plugin, _ := providers.Get("openai_compatible")
+		if _, err := plugin.NewReranker(
+			providers.Config{ModelName: "x"}); !errors.Is(err, enginemodel.ErrRerankUnsupported) {
+			t.Fatalf("错误 = %v, 期望 ErrRerankUnsupported", err)
+		}
+	})
 }

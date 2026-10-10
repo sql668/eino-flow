@@ -10,6 +10,7 @@ import (
 	"time"
 
 	enginemodel "einoflow-backend/internal/engine/model"
+	"einoflow-backend/internal/engine/model/tei"
 	"einoflow-backend/internal/model"
 )
 
@@ -93,7 +94,7 @@ func (p *teiProvider) Probe(ctx context.Context, cfg Config) (ProbeResult, error
 		switch {
 		case configured == "":
 			result.Message = fmt.Sprintf("边车连接正常，实际加载模型：%s", loaded)
-		case configured == parsed.ModelID:
+		case sameModelName(configured, parsed.ModelID):
 			result.ModelAvailable = true
 			result.Message = fmt.Sprintf("边车连接正常，已加载模型 %s，与配置一致", loaded)
 		default:
@@ -104,6 +105,40 @@ func (p *teiProvider) Probe(ctx context.Context, cfg Config) (ProbeResult, error
 		}
 		return result, nil
 	})
+}
+
+// sameModelName 判断「配置的模型」与「边车实际加载的模型」是否一致。
+//
+// 不能只做字符串相等：本项目为了让 TEI 跳过自带下载器（它要求响应带 ETag，
+// 而 hf-mirror 不返回该头），是用**本地路径**启动耳车的，
+// 于是 /info 报回的是 /data/models/BAAI/bge-reranker-v2-m3 这种路径。
+// 这里按路径后缀比对，既能识别出「同一个模型」，又保留对「换了模型」的告警能力。
+func sameModelName(configured, loaded string) bool {
+	configured = strings.Trim(strings.TrimSpace(configured), "/")
+	loaded = strings.Trim(strings.TrimSpace(loaded), "/")
+	if configured == "" || loaded == "" {
+		return configured == loaded
+	}
+	if strings.EqualFold(configured, loaded) {
+		return true
+	}
+	return strings.HasSuffix(strings.ToLower(loaded), strings.ToLower("/"+configured))
+}
+
+// NewReranker 构造 TEI 重排客户端。
+//
+// 刻意不做「启动时校验边车加载的模型」：那需要额外一次 /info 调用，
+// 而配置页的「测试连接」已经能看到真实加载的模型；
+// 在这里再拦一道会让「边车稍后启动」这种正常时序变成硬失败。
+func (p *teiProvider) NewReranker(cfg Config) (enginemodel.Reranker, error) {
+	if strings.TrimSpace(cfg.ModelName) == "" {
+		return nil, fmt.Errorf("未指定重排模型名")
+	}
+	return tei.New(tei.Options{
+		BaseURL: cfg.BaseURLOrDefault(p.DefaultBaseURL()),
+		Model:   strings.TrimSpace(cfg.ModelName),
+		APIKey:  cfg.Credential("api_key"),
+	}), nil
 }
 
 // NewEmbedder 明确不支持：TEI 在本项目里专职重排。

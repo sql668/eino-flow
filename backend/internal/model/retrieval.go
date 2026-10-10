@@ -9,6 +9,9 @@ import "time"
 const (
 	// DefaultRetrievalTopK 是请求未指定 top_k 时的默认召回条数。
 	DefaultRetrievalTopK = 5
+	// MaxCandidateTopK 是重排前召回条数的上限。
+	// 召回越多，重排的算力开销与噪声也越大；20~50 是常见区间，这里给到 100 留余量。
+	MaxCandidateTopK = 100
 	// MaxRetrievalTopK 是 top_k 上限。
 	// 检索开销随 top_k 线性增长，且超过这个量级后返回的多是噪声，
 	// 限制上限比事后排查「为什么一次检索要 10 秒」便宜。
@@ -38,6 +41,11 @@ type RetrievalRun struct {
 	// EmbeddingModel 记录本次检索用的向量模型：换模型后向量空间变了，
 	// 不记录就无法判断「某天的检索结果为什么变差」。
 	EmbeddingModel string
+	// CandidateCount 是重排前的召回条数；未启用重排时等于命中数。
+	// 记录它是为了还原「召回 20 条 → 重排后留 5 条」这个两阶段过程。
+	CandidateCount int
+	// RerankModel 是本次使用的重排模型；为空表示未做重排。
+	RerankModel string
 	// LatencyMS 是检索耗时（毫秒），用于观察性能退化。
 	LatencyMS int
 	// HitCount 是本次最终返回的命中条数。

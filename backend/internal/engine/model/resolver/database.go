@@ -38,14 +38,27 @@ type DatabaseResolver struct {
 	fallback enginemodel.Resolver
 	ttl      time.Duration
 
-	mu    sync.RWMutex
-	cache map[uint64]cachedEmbedder
+	mu sync.RWMutex
+	// cache 同时缓存向量化与重排实现，键里带类型前缀（如 "embed:12" / "rerank:9"）。
+	// 两类实现都是「构造一次要一次网络往返」的产物，用同一个 TTL 与同一套失效逻辑最省心。
+	cache map[string]cachedModel
 }
 
-// cachedEmbedder 是缓存的向量化实现。
-type cachedEmbedder struct {
-	embedder  enginemodel.Embedder
+// cachedModel 是缓存的模型实现（值为 enginemodel.Embedder 或 enginemodel.Reranker）。
+type cachedModel struct {
+	value     any
 	expiresAt time.Time
+}
+
+// 缓存键前缀。
+const (
+	cacheKeyEmbedder = "embed"
+	cacheKeyReranker = "rerank"
+)
+
+// cacheKey 拼缓存键。
+func cacheKey(kind string, instanceID uint64) string {
+	return fmt.Sprintf("%s:%d", kind, instanceID)
 }
 
 // DatabaseOptions 是构造参数。
@@ -79,7 +92,7 @@ func NewDatabase(opts DatabaseOptions) (*DatabaseResolver, error) {
 		bindings:  opts.Bindings,
 		fallback:  opts.Fallback,
 		ttl:       ttl,
-		cache:     make(map[uint64]cachedEmbedder),
+		cache:     make(map[string]cachedModel),
 	}, nil
 }
 
@@ -101,6 +114,147 @@ type EffectiveModel struct {
 type EffectiveEmbedder struct {
 	EffectiveModel
 	Embedder enginemodel.Embedder
+}
+
+// EffectiveReranker 是「生效重排模型 + 可用实例」的组合。
+type EffectiveReranker struct {
+	EffectiveModel
+	Reranker enginemodel.Reranker
+}
+
+// Effective 按模型类型返回生效模型信息，供配置页展示。
+//
+// 统一入口而不是按类型各写一个方法：配置页要展示的是「某类能力当前用哪个模型」，
+// 三类能力走同一条解析链，没必要暴露三条几乎一样的路径。
+func (r *DatabaseResolver) Effective(
+	ctx context.Context, kind model.ModelType, scope enginemodel.ScopeRef,
+) (EffectiveModel, error) {
+	switch kind {
+	case model.ModelTypeEmbedding:
+		effective, err := r.EmbedderFor(ctx, scope)
+		if err != nil {
+			return EffectiveModel{}, err
+		}
+		return effective.EffectiveModel, nil
+	case model.ModelTypeRerank:
+		effective, err := r.RerankerFor(ctx, scope)
+		if err != nil {
+			return EffectiveModel{}, err
+		}
+		return effective.EffectiveModel, nil
+	case model.ModelTypeLLM:
+		// 对话模型还没有消费方（随 SSE 对话落地），这里明确说清楚，
+		// 而不是回一个空模型让界面显示成「已就绪」。
+		return EffectiveModel{}, fmt.Errorf("%w: 对话模型的调用尚未接入（V0.1 收尾时随流式对话落地）",
+			enginemodel.ErrNotConfigured)
+	default:
+		return EffectiveModel{}, fmt.Errorf("不支持的模型类型 %q", kind)
+	}
+}
+
+// Reranker 实现 enginemodel.Resolver。
+func (r *DatabaseResolver) Reranker(ctx context.Context, scope enginemodel.ScopeRef) (enginemodel.Reranker, error) {
+	effective, err := r.RerankerFor(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	return effective.Reranker, nil
+}
+
+// RerankerFor 解析并返回当前生效的重排模型及其来源信息。
+func (r *DatabaseResolver) RerankerFor(
+	ctx context.Context, scope enginemodel.ScopeRef,
+) (EffectiveReranker, error) {
+	resolved, err := r.resolve(ctx, scope, model.ModelTypeRerank)
+	if err != nil {
+		return EffectiveReranker{}, err
+	}
+
+	if resolved == nil {
+		// 数据库里没有绑定：回落到配置文件里的重排配置；没配就返回 ErrNotConfigured，
+		// 由调用方决定「跳过重排但继续检索」。
+		if r.fallback == nil {
+			return EffectiveReranker{}, fmt.Errorf(
+				"%w: 尚未配置重排模型（可在「模型配置」中添加 TEI 模型并设为默认）", enginemodel.ErrNotConfigured)
+		}
+		reranker, err := r.fallback.Reranker(ctx, scope)
+		if err != nil {
+			return EffectiveReranker{}, err
+		}
+		return EffectiveReranker{
+			EffectiveModel: EffectiveModel{
+				ModelName: reranker.Name(),
+				ModelType: model.ModelTypeRerank,
+			},
+			Reranker: reranker,
+		}, nil
+	}
+
+	reranker, err := r.rerankerFor(*resolved.instance, *resolved.provider)
+	if err != nil {
+		return EffectiveReranker{}, err
+	}
+	return EffectiveReranker{
+		EffectiveModel: EffectiveModel{
+			InstanceID:   resolved.instance.ID,
+			Provider:     resolved.provider.Provider,
+			ProviderName: resolved.provider.DisplayName,
+			ModelName:    resolved.instance.ModelName,
+			ModelType:    resolved.instance.ModelType,
+			BaseURL:      resolved.provider.BaseURL,
+			Scope:        resolved.scope,
+		},
+		Reranker: reranker,
+	}, nil
+}
+
+// rerankerFor 构造（或取缓存）重排实现。
+//
+// 与向量化不同，这里构造时**不发起任何网络请求**：
+// 重排客户端是纯 HTTP 封装，服务端是否就绪在调用时才暴露。
+func (r *DatabaseResolver) rerankerFor(
+	instance model.ModelInstance, provider model.ModelProvider,
+) (enginemodel.Reranker, error) {
+	if cached, ok := r.cachedReranker(instance.ID); ok {
+		return cached, nil
+	}
+
+	plugin, err := providers.Get(provider.Provider)
+	if err != nil {
+		return nil, err
+	}
+	if !providers.Supports(plugin, instance.ModelType) {
+		return nil, fmt.Errorf("%w: 厂商 %s 不支持 %s 类型（该厂商支持：%v）",
+			enginemodel.ErrRerankUnsupported, plugin.DisplayName(), instance.ModelType, plugin.Kinds())
+	}
+
+	credentials, err := r.decryptCredentials(provider)
+	if err != nil {
+		return nil, err
+	}
+
+	reranker, err := plugin.NewReranker(providers.Config{
+		Provider:    provider.Provider,
+		BaseURL:     provider.BaseURL,
+		ModelName:   instance.ModelName,
+		Credentials: credentials,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	r.cachePut(cacheKey(cacheKeyReranker, instance.ID), reranker)
+	return reranker, nil
+}
+
+// cachedReranker 读取未过期的重排实现缓存。
+func (r *DatabaseResolver) cachedReranker(instanceID uint64) (enginemodel.Reranker, bool) {
+	value, ok := r.cacheGet(cacheKey(cacheKeyReranker, instanceID))
+	if !ok {
+		return nil, false
+	}
+	reranker, ok := value.(enginemodel.Reranker)
+	return reranker, ok
 }
 
 // Embedder 实现 enginemodel.Resolver。
@@ -231,7 +385,7 @@ func (r *DatabaseResolver) resolve(
 func (r *DatabaseResolver) embedderFor(
 	ctx context.Context, instance model.ModelInstance, provider model.ModelProvider,
 ) (enginemodel.Embedder, error) {
-	if cached, ok := r.cached(instance.ID); ok {
+	if cached, ok := r.cachedEmbedder(instance.ID); ok {
 		return cached, nil
 	}
 
@@ -261,21 +415,36 @@ func (r *DatabaseResolver) embedderFor(
 		return nil, err
 	}
 
-	r.mu.Lock()
-	r.cache[instance.ID] = cachedEmbedder{embedder: embedder, expiresAt: time.Now().Add(r.ttl)}
-	r.mu.Unlock()
+	r.cachePut(cacheKey(cacheKeyEmbedder, instance.ID), embedder)
 	return embedder, nil
 }
 
-// cached 读取未过期的缓存。
-func (r *DatabaseResolver) cached(instanceID uint64) (enginemodel.Embedder, bool) {
+// cachedEmbedder 读取未过期的向量化实现缓存。
+func (r *DatabaseResolver) cachedEmbedder(instanceID uint64) (enginemodel.Embedder, bool) {
+	value, ok := r.cacheGet(cacheKey(cacheKeyEmbedder, instanceID))
+	if !ok {
+		return nil, false
+	}
+	embedder, ok := value.(enginemodel.Embedder)
+	return embedder, ok
+}
+
+// cacheGet 读取未过期的缓存项。
+func (r *DatabaseResolver) cacheGet(key string) (any, bool) {
 	r.mu.RLock()
-	entry, ok := r.cache[instanceID]
+	entry, ok := r.cache[key]
 	r.mu.RUnlock()
 	if !ok || time.Now().After(entry.expiresAt) {
 		return nil, false
 	}
-	return entry.embedder, true
+	return entry.value, true
+}
+
+// cachePut 写入缓存项。并发首次构造时后写者覆盖先写者，两者等价，无需加锁重查。
+func (r *DatabaseResolver) cachePut(key string, value any) {
+	r.mu.Lock()
+	r.cache[key] = cachedModel{value: value, expiresAt: time.Now().Add(r.ttl)}
+	r.mu.Unlock()
 }
 
 // decryptCredentials 解密凭证并解析成字段表。
@@ -302,7 +471,7 @@ func (r *DatabaseResolver) decryptCredentials(provider model.ModelProvider) (map
 // 配置写入后必须调用：否则最长一个 TTL 之内，使用者会看到「明明改了配置却还在用旧模型」。
 func (r *DatabaseResolver) Invalidate() {
 	r.mu.Lock()
-	r.cache = make(map[uint64]cachedEmbedder)
+	r.cache = make(map[string]cachedModel)
 	r.mu.Unlock()
 }
 

@@ -43,6 +43,8 @@ type Config struct {
 	// 届时这两节的定位变成「默认值 + 兜底」，消费方（engine/rag）不用改。
 	Embedding EmbeddingConfig `yaml:"embedding"`
 	Retrieval RetrievalConfig `yaml:"retrieval"`
+	// Rerank 是重排模型的**配置兜底**（数据库里没绑定时生效），与 Embedding 同构。
+	Rerank RerankConfig `yaml:"rerank"`
 }
 
 // AppConfig 描述应用自身元信息。
@@ -171,9 +173,39 @@ type EmbeddingConfig struct {
 }
 
 // RetrievalConfig 描述检索的默认参数。
-// 这里的值是**兜底默认**：请求未指定 top_k 时生效，请求指定时以请求为准（上限见 maxRetrievalTopK）。
+// 这里的值是**兜底默认**：请求未指定 top_k 时生效，请求指定时以请求为准（上限见 model.MaxRetrievalTopK）。
 type RetrievalConfig struct {
 	TopK int `yaml:"top_k"`
+	// CandidateTopK 是重排前的向量召回条数，必须 >= TopK：
+	// 召回比最终结果还少，重排就无从选起。
+	CandidateTopK int `yaml:"candidate_top_k"`
+	// RerankMode 控制重排是否启用：
+	//   auto（默认）—— 配了重排模型就用，没配就跳过并说明原因；
+	//   off        —— 即使配了也不用（用于对比两阶段检索的效果差异）。
+	RerankMode string `yaml:"rerank"`
+}
+
+// RerankConfig 描述重排模型（TEI 边车）的兜底配置。
+type RerankConfig struct {
+	Provider string `yaml:"provider"`
+	BaseURL  string `yaml:"base_url"`
+	Model    string `yaml:"model"`
+}
+
+// 重排模式取值。
+const (
+	// RerankModeAuto 表示「配置了就用」。
+	RerankModeAuto = "auto"
+	// RerankModeOff 表示显式关闭。
+	RerankModeOff = "off"
+)
+
+// RerankEnabled 判断默认是否执行重排。
+//
+// 只决定**默认策略**，请求里可以显式覆盖（见 service.SearchInput.Rerank），
+// 这样才能在页面上直接对比「开重排 / 关重排」的效果。
+func (r RetrievalConfig) RerankEnabled() bool {
+	return !strings.EqualFold(strings.TrimSpace(r.RerankMode), RerankModeOff)
 }
 
 // SecurityConfig 描述安全相关配置。
@@ -229,6 +261,12 @@ const (
 
 	// 检索参数的默认值与上限来自领域定义，避免与请求校验各写一份。
 	defaultRetrievalTopK = model.DefaultRetrievalTopK
+	// 召回条数默认取最终条数的 4 倍：给重排留挑选空间，又不至于把大量无关内容拉进来。
+	defaultRetrievalCandidateTopK = 20
+
+	// 重排默认指向本机 TEI 边车（docker compose --profile rerank up -d tei）。
+	defaultRerankProvider = "tei"
+	defaultRerankBaseURL  = "http://127.0.0.1:8080"
 
 	defaultPostgresSSLMode         = "disable"
 	defaultPostgresMaxOpenConns    = 20
@@ -318,6 +356,18 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Retrieval.TopK == 0 {
 		c.Retrieval.TopK = defaultRetrievalTopK
+	}
+	if c.Retrieval.CandidateTopK == 0 {
+		c.Retrieval.CandidateTopK = defaultRetrievalCandidateTopK
+	}
+	if c.Retrieval.RerankMode == "" {
+		c.Retrieval.RerankMode = RerankModeAuto
+	}
+	if c.Rerank.Provider == "" {
+		c.Rerank.Provider = defaultRerankProvider
+	}
+	if c.Rerank.BaseURL == "" {
+		c.Rerank.BaseURL = defaultRerankBaseURL
 	}
 	if c.MinIO.Endpoint == "" {
 		c.MinIO.Endpoint = defaultMinIOEndpoint
@@ -422,6 +472,21 @@ func (c *Config) applyEnvOverrides() {
 	if v, ok := envInt("EINOFLOW_RETRIEVAL_TOP_K"); ok {
 		c.Retrieval.TopK = v
 	}
+	if v, ok := envInt("EINOFLOW_RETRIEVAL_CANDIDATE_TOP_K"); ok {
+		c.Retrieval.CandidateTopK = v
+	}
+	if v, ok := envString("EINOFLOW_RETRIEVAL_RERANK"); ok {
+		c.Retrieval.RerankMode = v
+	}
+	if v, ok := envString("EINOFLOW_RERANK_PROVIDER"); ok {
+		c.Rerank.Provider = v
+	}
+	if v, ok := envString("EINOFLOW_RERANK_BASE_URL"); ok {
+		c.Rerank.BaseURL = v
+	}
+	if v, ok := envString("EINOFLOW_RERANK_MODEL"); ok {
+		c.Rerank.Model = v
+	}
 	if v, ok := envString("EINOFLOW_SECRET_KEY"); ok {
 		c.Security.SecretKey = v
 	}
@@ -486,6 +551,22 @@ func (c *Config) validate() error {
 	if c.Retrieval.TopK <= 0 || c.Retrieval.TopK > model.MaxRetrievalTopK {
 		return fmt.Errorf("retrieval.top_k 必须在 1..%d 之间，当前为 %d",
 			model.MaxRetrievalTopK, c.Retrieval.TopK)
+	}
+	if c.Retrieval.CandidateTopK < c.Retrieval.TopK {
+		// 召回数小于最终条数是自相矛盾的配置，直接拒绝而不是静默放大：
+		// 静默放大意味着使用者以为「只召回 3 条」，实际跑的却是别的值。
+		return fmt.Errorf("retrieval.candidate_top_k（%d）不能小于 retrieval.top_k（%d）",
+			c.Retrieval.CandidateTopK, c.Retrieval.TopK)
+	}
+	if c.Retrieval.CandidateTopK > model.MaxCandidateTopK {
+		return fmt.Errorf("retrieval.candidate_top_k 不能超过 %d，当前为 %d",
+			model.MaxCandidateTopK, c.Retrieval.CandidateTopK)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Retrieval.RerankMode)) {
+	case RerankModeAuto, RerankModeOff:
+	default:
+		return fmt.Errorf("retrieval.rerank 只支持 %s / %s，当前为 %q",
+			RerankModeAuto, RerankModeOff, c.Retrieval.RerankMode)
 	}
 	if c.Security.SecretKey == "" {
 		return fmt.Errorf(

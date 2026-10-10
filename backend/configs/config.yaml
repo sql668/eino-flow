@@ -59,7 +59,18 @@ embedding:
 
 # 检索默认参数（请求带了 top_k 时以请求为准，上限 50）
 retrieval:
-  top_k: 5
+  top_k: 5            # 最终返回条数
+  candidate_top_k: 20 # 重排前的向量召回条数（必须 >= top_k）
+  rerank: auto        # auto=配了重排模型就用；off=即使配了也不用
+
+# 重排模型的配置兜底（数据库里没绑定时生效）。
+# 边车由根目录 docker-compose.yml 的 tei 服务提供（profile: rerank）。
+# 只配 base_url 与模型名还不够，要让 RAG 真的用上它：
+#   要么在「模型配置」页添加 TEI 模型并设为默认（推荐），要么在这里填 model。
+rerank:
+  provider: tei
+  base_url: http://127.0.0.1:8080
+  model: ""           # 留空表示不做重排（检索仍可用，只是少一层精排）
 
 # 安全：模型凭证的加密密钥（AES-256-GCM，32 字节）。
 # **留空**：只允许通过环境变量 EINOFLOW_SECRET_KEY 注入——

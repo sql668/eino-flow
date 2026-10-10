@@ -120,7 +120,10 @@ type BindModelInput struct {
 // 用接口而不是具体的 *resolver.DatabaseResolver：配置页要展示「当前生效模型」，
 // 而单测需要打桩（真实解析会去连 Ollama / 数据库）。
 type effectiveResolver interface {
-	EmbedderFor(ctx context.Context, scope enginemodel.ScopeRef) (resolver.EffectiveEmbedder, error)
+	// Effective 按模型类型返回「当前生效的模型」。
+	// 用类型参数而不是按类型各写一个方法：三类能力走同一条解析链，
+	// 加一类能力（比如将来的语音）不该再改接口。
+	Effective(ctx context.Context, kind model.ModelType, scope enginemodel.ScopeRef) (resolver.EffectiveModel, error)
 	Invalidate()
 }
 
@@ -598,18 +601,22 @@ func (s *ModelConfigService) ListBindings(
 	return views, nil
 }
 
-// EffectiveEmbedding 返回当前生效的向量化模型。
+// EffectiveModel 返回当前生效的模型。
 //
 // 这是配置页最有价值的一块信息：它回答「现在到底在用哪个模型」，
-// 而不是「我配了哪些模型」。
-func (s *ModelConfigService) EffectiveEmbedding(
-	ctx context.Context, appID, datasetID uint64,
+// 而不是「我配了哪些模型」。三级覆盖 + 配置兜底叠加起来，光看列表很难推断结果。
+func (s *ModelConfigService) EffectiveModel(
+	ctx context.Context, kind model.ModelType, appID, datasetID uint64,
 ) (resolver.EffectiveModel, error) {
-	effective, err := s.resolver.EmbedderFor(ctx, enginemodel.ScopeRef{AppID: appID, DatasetID: datasetID})
+	if !kind.IsValid() {
+		return resolver.EffectiveModel{}, fmt.Errorf("%w: 不支持的模型类型 %q", ErrInvalidInput, kind)
+	}
+	effective, err := s.resolver.Effective(
+		ctx, kind, enginemodel.ScopeRef{AppID: appID, DatasetID: datasetID})
 	if err != nil {
 		return resolver.EffectiveModel{}, translateError(err)
 	}
-	return effective.EffectiveModel, nil
+	return effective, nil
 }
 
 // resolveTestCredentials 取测试用凭证：优先用入参，否则用已保存的。

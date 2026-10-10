@@ -143,3 +143,12 @@ func buildProbeResult(okMessage string, models []string, want string) ProbeResul
 	result.Message = fmt.Sprintf("%s，但未找到模型 %s（需先拉取该模型）", okMessage, want)
 	return result
 }
+
+// NewReranker 明确不支持：实测 Ollama 没有 /rerank 端点，其重排模型调用即 GGML_ASSERT 崩溃（D5）。
+//
+// 错误信息里直接给出替代方案：只说「不支持」会让使用者去反复试模型名，
+// 而真正该做的是换成 TEI 边车。
+func (p *ollamaProvider) NewReranker(Config) (enginemodel.Reranker, error) {
+	return nil, fmt.Errorf("%w: Ollama 不提供重排接口，请添加 TEI 边车作为重排模型（docker compose --profile rerank up -d tei）",
+		enginemodel.ErrRerankUnsupported)
+}

@@ -103,6 +103,8 @@ type Provider interface {
 	Probe(ctx context.Context, cfg Config) (ProbeResult, error)
 	// NewEmbedder 构造向量化实现；该厂商不支持 embedding 时返回错误。
 	NewEmbedder(cfg Config) (enginemodel.Embedder, error)
+	// NewReranker 构造重排实现；该厂商不支持重排时返回错误（带可执行的指引）。
+	NewReranker(cfg Config) (enginemodel.Reranker, error)
 }
 
 // registry 是内置厂商注册表。key 为厂商标识。

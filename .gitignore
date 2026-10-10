@@ -108,3 +108,5 @@ docker-compose.override.yml
 
 # ----rag 测试文档 ----
 docs/rag-test/
+# TEI 重排模型（2GB 级，按需下载，不进仓库）
+/deploy/tei/models/

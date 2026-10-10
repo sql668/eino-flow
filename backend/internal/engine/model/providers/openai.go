@@ -128,3 +128,11 @@ func (p *openaiCompatibleProvider) NewEmbedder(cfg Config) (enginemodel.Embedder
 	}
 	return instance, nil
 }
+
+// NewReranker 不支持：OpenAI 兼容协议里没有统一的重排接口
+// （各家的重排端点路径与出入参都不一样），因此不在这个厂商里硬凑，
+// 统一走 TEI 边车（见 D5）。
+func (p *openaiCompatibleProvider) NewReranker(Config) (enginemodel.Reranker, error) {
+	return nil, fmt.Errorf("%w: OpenAI 兼容接口没有统一的重排端点，请使用 TEI 边车承载重排",
+		enginemodel.ErrRerankUnsupported)
+}
