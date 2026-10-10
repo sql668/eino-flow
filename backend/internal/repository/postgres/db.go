@@ -10,10 +10,13 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // 连接池默认值。仅在配置未提供时兜底，正常情况由 configs/config.yaml 决定。
@@ -36,6 +39,14 @@ func Open(ctx context.Context, dsn string, pool PoolConfig) (*gorm.DB, error) {
 		// 关掉 GORM 给每条写操作默认套上的事务：单条写入不需要额外开销，
 		// 真正需要事务时由 service 层通过 repository.TxManager 显式划定。
 		SkipDefaultTransaction: true,
+		// 日志级别调到 Warn 并忽略「记录不存在」：
+		// 业务上大量存在「查了没有就是没有」的正常查询（比如解析模型时逐级找绑定），
+		// 默认配置会把它们全部当错误打出来，真正的错误反而被淹没。
+		Logger: logger.New(log.New(os.Stdout, "", log.LstdFlags), logger.Config{
+			SlowThreshold:             500 * time.Millisecond,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+		}),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("打开 PostgreSQL 连接失败: %w", err)

@@ -83,6 +83,31 @@ export async function request<T = unknown>(
   return payload.data as T;
 }
 
+/**
+ * 上传文件（multipart/form-data）。
+ *
+ * 单独一个函数而不是塞进 request()：Content-Type 必须**留空**让浏览器自己带上
+ * boundary，而 request() 只要 body 有值就会设成 application/json——硬塞进去必然上传失败。
+ */
+export async function uploadFile<T = unknown>(
+  path: string,
+  file: File,
+  field = "file",
+): Promise<T> {
+  const form = new FormData();
+  form.append(field, file);
+
+  const response = await fetch(buildUrl(path), { method: "POST", body: form });
+  if (!response.ok) {
+    throw new ApiError(`上传失败: HTTP ${response.status}`, ApiCode.Internal, response.status);
+  }
+  const payload = (await response.json()) as ApiResponse<T>;
+  if (payload.code !== ApiCode.OK) {
+    throw new ApiError(payload.message || "上传失败", payload.code, response.status);
+  }
+  return payload.data as T;
+}
+
 export const http = {
   get: <T = unknown>(path: string, options?: RequestOptions) =>
     request<T>(path, { ...options, method: "GET" }),

@@ -158,3 +158,157 @@ export interface EffectiveModelInfo {
   scope: ModelScope | "";
   fromConfig: boolean;
 }
+
+/*
+ * 应用 / 知识库 / 文档 / 会话契约。
+ * 对应后端 handler/app.go、dataset.go、document.go、conversation.go、chat.go，
+ * 字段名与后端 JSON 标签一一对应。
+ */
+
+/** 应用形态。 */
+export type AppMode = "chat" | "rag" | "agent" | "workflow";
+
+export interface AppInfo {
+  id: number;
+  name: string;
+  description: string;
+  mode: AppMode;
+  status: string;
+  icon: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AppListResult {
+  items: AppInfo[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface DatasetInfo {
+  id: number;
+  name: string;
+  description: string;
+  embeddingModel: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DatasetListResult {
+  items: DatasetInfo[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * 文档处理状态。
+ * pending/indexing 期间前端需要轮询，ready 才可检索，failed 要看 errorMessage。
+ */
+export type DocumentStatus = "pending" | "indexing" | "ready" | "failed";
+
+export interface DocumentInfo {
+  id: number;
+  datasetId: number;
+  name: string;
+  fileSize: number;
+  status: DocumentStatus;
+  segmentCount: number;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DocumentListResult {
+  items: DocumentInfo[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface SegmentInfo {
+  id: number;
+  chunkIndex: number;
+  content: string;
+  tokenCount: number;
+  page: number;
+  locator: string;
+  kind: string;
+  titlePath: string[];
+  createdAt: string;
+}
+
+export interface SegmentListResult {
+  items: SegmentInfo[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface ConversationInfo {
+  id: number;
+  appId: number;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConversationListResult {
+  items: ConversationInfo[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** 助手消息引用的片段（与后端 model.MessageCitation 对应）。 */
+export interface CitationInfo {
+  /** 回答里的引用编号，从 1 开始 */
+  index: number;
+  segmentId: number;
+  documentId: number;
+  documentName: string;
+  page: number;
+  titlePath: string[];
+  score: number;
+  rerankScore?: number;
+}
+
+export interface MessageInfo {
+  id: number;
+  conversationId: number;
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  citations?: CitationInfo[];
+  tokenCount: number;
+  latencyMs: number;
+  createdAt: string;
+}
+
+export interface MessageListResult {
+  items: MessageInfo[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** SSE 事件负载：citations → delta（多次）→ done。 */
+export interface ChatCitationsPayload {
+  citations: CitationInfo[];
+}
+
+export interface ChatDeltaPayload {
+  content: string;
+}
+
+export interface ChatDonePayload {
+  conversationId: number;
+  messageId: number;
+  model: string;
+  latencyMs: number;
+}
+
+export interface ChatErrorPayload {
+  message: string;
+}

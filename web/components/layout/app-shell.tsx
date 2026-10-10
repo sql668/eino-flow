@@ -46,13 +46,11 @@ const navItems: NavItem[] = [
     href: "/apps",
     label: "应用",
     icon: icon(<rect x="3" y="3" width="7" height="7" rx="1.5" />),
-    pending: true,
   },
   {
     href: "/datasets",
     label: "知识库",
     icon: icon(<path d="M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Zm0 0v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" />),
-    pending: true,
   },
   {
     href: "/settings/models",
