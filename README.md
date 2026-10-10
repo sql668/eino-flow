@@ -47,9 +47,22 @@ ollama pull bge-m3:latest          # 模型必须在本地
 curl http://127.0.0.1:11434/api/tags   # 确认 Ollama 在跑
 ```
 
-模型地址 / 模型名 / 维度来源见 `backend/configs/config.yaml` 的 `embedding` 一节：
-维度不在配置里写死，启动时向服务端探测，并与已有 Milvus 集合比对，不一致直接报错。
+模型地址 / 模型名 / 维度来源有两条路径，**数据库配置优先，配置文件兜底**：
+
+1. 数据库配置（推荐）：前端「模型配置」页（`/settings/models`）保存厂商凭证并绑定模型；
+2. 配置文件兜底：`backend/configs/config.yaml` 的 `embedding` 一节，用于「还没配置任何模型」时的启动。
+
+维度不在配置里写死，而是启动时向服务端探测，并与已有 Milvus 集合比对，不一致直接报错。
 换 embedding 模型后必须重建集合（删除 `einoflow_segments` 后重启后端会自动重建）。
+
+模型凭证以 AES-256-GCM 加密存储，**必须配置加密密钥**，否则后端拒绝启动：
+
+```bash
+# 生成并写入 .env（.env 已被 gitignore，不会进仓库）
+printf 'EINOFLOW_SECRET_KEY=%s\n' "$(openssl rand -base64 32)" >> .env
+```
+
+注意：换掉这个密钥，已保存的厂商凭证将无法解密，需要在界面上重新填写。
 
 ## 本地依赖说明
 
