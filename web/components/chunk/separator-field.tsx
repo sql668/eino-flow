@@ -22,6 +22,13 @@ export interface SeparatorFieldProps {
   disabled?: boolean;
 }
 
+// DEFAULT_SEPARATORS 是切到「按自定义分隔符分段」时的初始值。
+//
+// 为什么不留空：这个字段是必填的，留空会让「刚选中模式」立刻触发一次注定失败的
+// 预览（后端明确拒绝空分隔符）。给一个最常用的写法（空行 = 一条记录），
+// 选中就能看到切分结果，也知道该按什么格式填。
+export const DEFAULT_SEPARATORS = ["\\n\\n"];
+
 export function SeparatorField({ value, onChange, disabled = false }: SeparatorFieldProps) {
   // 输入框里存的是「原始文本」而不是数组：用户刚敲完 \,
   // 时如果立刻按数组重新渲染，输入内容会被吃掉。

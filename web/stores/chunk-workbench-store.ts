@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 
+import { DEFAULT_SEPARATORS } from "@/components/chunk/separator-field";
 import { chunkApi } from "@/lib/api/console";
 import type {
   ChunkConfig,
@@ -34,6 +35,13 @@ interface ChunkWorkbenchState {
   loading: boolean;
   /** 预览请求进行中 */
   previewing: boolean;
+  /**
+   * 预览被跳过的原因（当前配置还不完整，例如分隔符模式没填分隔符）。
+   *
+   * 与 error 分开：这不是失败，是「还没轮到发请求」，
+   * 混用会让界面用红色报错去说一件本来很正常的事。
+   */
+  blockedReason: string;
   /** 入库请求进行中 */
   ingesting: boolean;
   /** 是否把当前配置存为知识库默认 */
@@ -90,6 +98,7 @@ export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => 
     preview: null,
     loading: false,
     previewing: false,
+    blockedReason: "",
     ingesting: false,
     saveAsDefault: false,
     error: "",
@@ -107,7 +116,18 @@ export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => 
     },
 
     setConfig: (patch) => {
-      set((state) => ({ config: { ...state.config, ...patch } }));
+      set((state) => {
+        const config = { ...state.config, ...patch };
+        // 只在**切到**分隔符模式且还没填过分隔符时补默认值：否则这次改动会立刻
+        // 触发一次注定失败的预览（后端拒绝空分隔符），用户看到的是红色报错。
+        //
+        // 判断依据是 patch 本身带没带 mode，而不是「结果里 mode 是不是 separator」：
+        // 后者会让「用户手动清空分隔符输入框」被立刻填回去，输入框和配置对不上。
+        if (patch.mode === "separator" && config.separators.length === 0) {
+          config.separators = [...DEFAULT_SEPARATORS];
+        }
+        return { config };
+      });
       schedulePreview();
     },
 
@@ -185,7 +205,19 @@ export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => 
       if (!documentId) {
         return;
       }
-      set({ previewing: true, error: "" });
+      // 配置本身还不完整时不要发请求：分隔符模式下没填分隔符，
+      // 后端会（正确但没意义地）返回 400，而用户此刻只是还没填完表单。
+      // 这里给出「等待填写」的状态，比一条红色报错有用得多。
+      if (config.mode === "separator" && config.separators.length === 0) {
+        set({
+          previewing: false,
+          preview: null,
+          error: "",
+          blockedReason: "填写分隔符后会自动预览（多个用英文逗号隔开）",
+        });
+        return;
+      }
+      set({ previewing: true, error: "", blockedReason: "" });
       try {
         const preview = await chunkApi.preview(documentId, config);
         set({ preview, previewing: false });
@@ -208,7 +240,7 @@ export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => 
       }
     },
 
-    clearMessages: () => set({ error: "", notice: "" }),
+    clearMessages: () => set({ error: "", notice: "", blockedReason: "" }),
   };
 });
 

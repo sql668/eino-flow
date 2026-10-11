@@ -16,11 +16,12 @@ import type { PreviewChunk } from "@/types/api";
 export function ChunkPreviewPanel() {
   const preview = useChunkWorkbenchStore((state) => state.preview);
   const previewing = useChunkWorkbenchStore((state) => state.previewing);
+  const blockedReason = useChunkWorkbenchStore((state) => state.blockedReason);
 
   if (!preview) {
     return (
       <p className="text-sm text-ink-muted">
-        {previewing ? "正在按当前配置预览…" : "加载预览…"}
+        {previewing ? "正在按当前配置预览…" : blockedReason || "加载预览…"}
       </p>
     );
   }

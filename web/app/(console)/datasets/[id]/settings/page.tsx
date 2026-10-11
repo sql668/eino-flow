@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { PageContainer } from "@/components/layout/page-container";
-import { SeparatorField } from "@/components/chunk/separator-field";
+import { DEFAULT_SEPARATORS, SeparatorField } from "@/components/chunk/separator-field";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
 import { chunkApi, datasetsApi } from "@/lib/api/console";
@@ -191,6 +191,12 @@ export default function DatasetSettingsPage() {
                     defaults: {
                       ...options.defaults,
                       mode: event.target.value as ChunkOptions["defaults"]["mode"],
+                      // 切到分隔符模式时给一个默认分隔符：
+                      // 这块是必填项，留空会让保存时收到后端的「必须填写分隔符」。
+                      separators:
+                        event.target.value === "separator" && options.defaults.separators.length === 0
+                          ? DEFAULT_SEPARATORS
+                          : options.defaults.separators,
                     },
                   })
                 }
