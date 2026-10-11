@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { Reading, ReadingRow } from "@/components/ui/reading";
 import { useChunkWorkbenchStore } from "@/stores/chunk-workbench-store";
 import type { PreviewChunk } from "@/types/api";
 
@@ -38,7 +39,7 @@ export function ChunkPreviewPanel() {
       </div>
 
       {/* 读数条：像仪表一样把关键数字并排摆出来，数字用等宽 + 单位标签 */}
-      <dl className="grid grid-cols-2 divide-grid sm:grid-cols-4 sm:divide-x">
+      <ReadingRow columns={4}>
         <Reading label="片段总数" value={String(stats.total)} unit="段" note={`预览前 ${preview.returned}`} />
         <Reading label="平均长度" value={String(stats.avgRunes)} unit="字" note={`最长 ${stats.maxChunkRunes}`} />
         <Reading
@@ -54,7 +55,7 @@ export function ChunkPreviewPanel() {
           unit="字"
           note={`表格 ${stats.tables} · 噪声 ${stats.droppedNoise}`}
         />
-      </dl>
+      </ReadingRow>
 
       {preview.hints.length > 0 ? (
         <ul className="flex flex-col gap-1 rounded border border-pri/20 bg-pri-soft px-3 py-2">
@@ -118,43 +119,6 @@ export function ChunkPreviewPanel() {
           共 {preview.total} 段，此处只预览前 {preview.returned} 段
         </p>
       ) : null}
-    </div>
-  );
-}
-
-/**
- * Reading 是仪表读数：数字用等宽字体放大，单位与说明用小字托底。
- *
- * 抽成组件而不是散着写，是因为「读数」是本设计的记忆点：
- * 它的形态（大数字 + 小单位 + 说明）必须处处一致，否则就不像仪表了。
- */
-function Reading({
-  label,
-  value,
-  unit,
-  note,
-  tone = "muted",
-}: {
-  label: string;
-  value: string;
-  unit: string;
-  note?: string;
-  tone?: "muted" | "warn";
-}) {
-  return (
-    <div className="flex flex-col gap-0.5 px-3 py-2 first:pl-0">
-      <dt className="eyebrow !text-ink-soft">{label}</dt>
-      <dd className="flex items-baseline gap-1">
-        <span
-          className={`reading text-[22px] font-semibold leading-7 ${
-            tone === "warn" ? "text-warn" : "text-ink"
-          }`}
-        >
-          {value}
-        </span>
-        <span className="text-[11px] text-ink-soft">{unit}</span>
-      </dd>
-      {note ? <span className="reading text-[10px] text-ink-soft">{note}</span> : null}
     </div>
   );
 }

@@ -22,9 +22,9 @@ const kindLabels: Record<ModelKind, string> = {
 };
 
 const kindStyles: Record<ModelKind, string> = {
-  llm: "bg-violet-50 text-violet-700",
-  embedding: "bg-emerald-50 text-emerald-700",
-  rerank: "bg-amber-50 text-amber-700",
+  llm: "bg-pri-soft text-pri-ink",
+  embedding: "bg-ok-soft text-ok",
+  rerank: "bg-warn-soft text-warn",
 };
 
 export function ProviderCard({
@@ -71,10 +71,10 @@ export function ProviderCard({
   };
 
   return (
-    <section className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
+    <section className="rounded border border-grid bg-white">
       <header className="flex flex-wrap items-start gap-3 px-4 py-3">
         <div
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-neutral-200 text-sm font-semibold text-neutral-500"
+          className="reading flex h-8 w-8 shrink-0 items-center justify-center rounded border border-grid text-xs font-semibold text-ink-soft"
           aria-hidden="true"
         >
           {provider.displayName.slice(0, 1)}
@@ -82,26 +82,26 @@ export function ProviderCard({
 
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold text-neutral-900">{provider.displayName}</h3>
+            <h3 className="text-sm font-semibold text-ink">{provider.displayName}</h3>
             {provider.configured ? (
-              <span className="flex items-center gap-1 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-700">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              <span className="flex items-center gap-1 rounded-sm bg-ok-soft px-1.5 py-0.5 text-[11px] text-ok">
+                <span className="h-1.5 w-1.5 rounded-full bg-ok" />
                 {provider.credentialMask ? provider.credentialMask : "已配置"}
               </span>
             ) : (
-              <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-700">
+              <span className="rounded-sm bg-warn-soft px-1.5 py-0.5 text-[11px] text-warn">
                 未配置
               </span>
             )}
           </div>
           {provider.description ? (
-            <p className="text-xs leading-5 text-neutral-500">{provider.description}</p>
+            <p className="text-xs leading-5 text-ink-soft">{provider.description}</p>
           ) : null}
           <div className="flex flex-wrap gap-1.5">
             {provider.kinds.map((kind) => (
               <span
                 key={kind}
-                className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${kindStyles[kind]}`}
+                className={`rounded-sm px-1.5 py-0.5 text-[11px] font-medium ${kindStyles[kind]}`}
               >
                 {kindLabels[kind]}
               </span>
@@ -137,7 +137,7 @@ export function ProviderCard({
       </header>
 
       {editing ? (
-        <div className="flex flex-col gap-3 border-t border-neutral-100 bg-neutral-50/60 px-4 py-4">
+        <div className="flex flex-col gap-3 border-t border-grid-soft bg-paper px-4 py-4">
           <Field label="服务地址" hint={`留空则使用默认地址 ${provider.defaultBaseUrl}`}>
             <Input
               value={baseUrl}
@@ -206,10 +206,10 @@ export function ProviderCard({
         </div>
       ) : null}
 
-      <div className="border-t border-neutral-100 px-4 py-2.5">
+      <div className="border-t border-grid-soft px-4 py-2.5">
         <button
           type="button"
-          className="flex w-full items-center gap-1.5 text-xs text-neutral-600 hover:text-neutral-900"
+          className="flex w-full items-center gap-1.5 text-xs text-ink-muted hover:text-ink"
           onClick={() => setExpanded((prev) => !prev)}
         >
           <span className={`transition-transform ${expanded ? "rotate-90" : ""}`}>▸</span>
@@ -218,17 +218,17 @@ export function ProviderCard({
       </div>
 
       {expanded ? (
-        <div className="flex flex-col gap-3 border-t border-neutral-100 px-4 py-3">
+        <div className="flex flex-col gap-3 border-t border-grid-soft px-4 py-3">
           {!provider.configured ? (
-            <p className="rounded-md bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+            <p className="rounded border border-warn/30 bg-warn-soft px-3 py-2 text-xs leading-5 text-warn">
               请先保存凭证。模型不知道自己该连哪个地址，没有厂商配置就无法添加模型。
             </p>
           ) : null}
 
           {models.length === 0 ? (
-            <p className="text-xs text-neutral-400">该厂商下还没有模型</p>
+            <p className="text-xs text-ink-soft">该厂商下还没有模型</p>
           ) : (
-            <ul className="flex flex-col divide-y divide-neutral-100">
+            <ul className="flex flex-col divide-y divide-grid-soft">
               {models.map((model) => {
                 const isDefault = bindings.some(
                   (binding) => binding.modelType === model.modelType && binding.instanceId === model.id,
@@ -237,21 +237,21 @@ export function ProviderCard({
                   <li key={model.id} className="flex flex-wrap items-center gap-2 py-2">
                     <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-neutral-900">
+                        <span className="truncate text-sm font-medium text-ink">
                           {model.displayName || model.modelName}
                         </span>
                         {isDefault ? (
-                          <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-700">
+                          <span className="rounded-sm bg-pri-soft px-1.5 py-0.5 text-[11px] text-pri-ink">
                             默认
                           </span>
                         ) : null}
                         {!model.enabled ? (
-                          <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-500">
+                          <span className="rounded-sm bg-grid-soft px-1.5 py-0.5 text-[11px] text-ink-muted">
                             已停用
                           </span>
                         ) : null}
                       </div>
-                      <span className="truncate text-xs text-neutral-500">{model.modelName}</span>
+                      <span className="reading truncate text-xs text-ink-soft">{model.modelName}</span>
                       {modelProbes[model.id] ? <ProbeHint probe={modelProbes[model.id]} /> : null}
                     </div>
 
@@ -312,7 +312,7 @@ export function ProviderCard({
           {provider.configured ? (
             // 单行排列：标签在控件上方、控件等高，因此「添加模型」按钮与三个输入框天然对齐。
             // 说明文字走标签旁的悬浮图标，不占额外行高（见 components/ui/field.tsx）。
-            <div className="flex flex-wrap items-end gap-3 rounded-lg bg-neutral-50 px-3 py-3">
+            <div className="flex flex-wrap items-end gap-3 rounded border border-grid-soft bg-paper px-3 py-3">
               <div className="w-32">
                 <Field label="能力类型">
                   <Select
@@ -385,8 +385,8 @@ export function ProviderCard({
 function ProbeHint({ probe }: { probe: ProbeResultInfo }) {
   return (
     <p
-      className={`mt-0.5 rounded-md px-2 py-1 text-[11px] leading-5 ${
-        probe.ok ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"
+      className={`mt-0.5 rounded-sm px-2 py-1 text-[11px] leading-5 ${
+        probe.ok ? "bg-ok-soft text-ok" : "bg-warn-soft text-warn"
       }`}
     >
       {probe.message}

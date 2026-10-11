@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { PageContainer } from "@/components/layout/page-container";
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select } from "@/components/ui/field";
+import { Field, Input, Panel, Select } from "@/components/ui/field";
 import { appsApi } from "@/lib/api/console";
 import { ApiError } from "@/lib/http";
 import type { AppInfo, AppMode } from "@/types/api";
@@ -77,18 +77,26 @@ export default function AppsPage() {
 
   return (
     <PageContainer className="flex flex-col gap-5 px-8 py-7">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold tracking-tight">应用</h1>
-        <p className="text-sm leading-6 text-neutral-600">
-          应用分两类：<b>对话</b>只聊天；<b>知识库问答</b>会先检索你选中的知识库，回答里带来源引用。
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <span className="eyebrow">应用</span>
+          <h1 className="text-[22px] font-semibold tracking-tight text-ink">对话入口</h1>
+          <p className="max-w-2xl text-sm leading-6 text-ink-muted">
+            应用分两类：<span className="text-ink">对话</span>只聊天；
+            <span className="text-ink">知识库问答</span>会先检索你选中的知识库，回答带来源引用。
+          </p>
+        </div>
+        <span className="reading text-xs text-ink-soft">{apps.length} 个应用</span>
       </header>
 
       {error ? (
-        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        <p className="rounded border border-fault/30 bg-fault-soft px-3 py-2 text-sm text-fault">
+          {error}
+        </p>
       ) : null}
 
-      <section className="flex flex-wrap items-end gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3">
+      <Panel eyebrow="新建" title="创建一个应用">
+      <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-48 flex-1">
           <Field label="应用名" required>
             <Input
@@ -128,51 +136,57 @@ export default function AppsPage() {
         <div className="flex flex-col gap-1.5">
           <span className="h-4" aria-hidden="true" />
           <Button variant="primary" busy={creating} onClick={handleCreate}>
-            创建应用
+            创建
           </Button>
         </div>
-      </section>
+      </div>
+      </Panel>
 
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center gap-3">
-          <h2 className="text-sm font-medium text-neutral-500">全部应用（{apps.length}）</h2>
+      <Panel
+        eyebrow="全部"
+        title="应用清单"
+        reading={`${apps.length} 项`}
+        actions={
           <Button busy={loading} onClick={() => void load()}>
             刷新
           </Button>
-        </div>
-
+        }
+      >
         {apps.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-neutral-300 px-4 py-8 text-center text-xs text-neutral-400">
+          <p className="py-8 text-center text-xs text-ink-soft">
             {loading ? "加载中…" : "还没有应用，先在上面创建一个"}
           </p>
         ) : (
-          <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <ul className="divide-y divide-grid-soft">
             {apps.map((app) => (
-              <li
-                key={app.id}
-                className="flex flex-col gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-3"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-semibold text-neutral-900">
-                    {app.name}
-                  </span>
-                  <span
-                    className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] ${
-                      app.mode === "rag"
-                        ? "bg-emerald-50 text-emerald-700"
-                        : "bg-violet-50 text-violet-700"
-                    }`}
-                  >
-                    {modeLabels[app.mode] ?? app.mode}
+              <li key={app.id} className="flex flex-wrap items-center gap-3 py-3">
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href={`/apps/${app.id}`}
+                      className="truncate text-sm font-medium text-ink hover:text-pri"
+                    >
+                      {app.name}
+                    </Link>
+                    <span
+                      className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[11px] ${
+                        app.mode === "rag" ? "bg-ok-soft text-ok" : "bg-pri-soft text-pri-ink"
+                      }`}
+                    >
+                      {modeLabels[app.mode] ?? app.mode}
+                    </span>
+                  </div>
+                  <span className="truncate text-xs text-ink-muted">
+                    {app.description || "（无描述）"}
                   </span>
                 </div>
-                <p className="min-h-10 text-xs leading-5 text-neutral-500">
-                  {app.description || "（无描述）"}
-                </p>
+                <span className="reading hidden text-xs text-ink-soft md:block">
+                  {app.updatedAt.slice(0, 10)}
+                </span>
                 <div className="flex items-center gap-2">
                   <Link
                     href={`/apps/${app.id}`}
-                    className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs text-white transition-colors hover:bg-neutral-700"
+                    className="rounded bg-pri px-3 py-1.5 text-xs text-white transition-colors hover:bg-pri-ink"
                   >
                     对话调试
                   </Link>
@@ -191,7 +205,7 @@ export default function AppsPage() {
             ))}
           </ul>
         )}
-      </section>
+      </Panel>
     </PageContainer>
   );
 }

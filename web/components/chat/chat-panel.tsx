@@ -150,19 +150,17 @@ export function ChatPanel({ app }: { app: AppInfo }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 px-8 py-6">
-      <header className="flex flex-wrap items-center gap-3">
-        <div className="flex flex-col">
-          <h1 className="text-xl font-semibold tracking-tight">{app.name}</h1>
-          <span className="text-xs text-neutral-500">
-            {needDataset
-              ? "知识库问答：先检索再回答，回答带来源引用"
-              : "对话：直接回答，不检索"}
-            {conversationId > 0 ? ` · 会话 #${conversationId}` : ""}
+      <header className="flex flex-wrap items-end gap-4 border-b border-grid pb-3">
+        <div className="flex flex-col gap-0.5">
+          <span className="eyebrow">对话调试</span>
+          <h1 className="text-[22px] font-semibold tracking-tight text-ink">{app.name}</h1>
+          <span className="text-xs text-ink-muted">
+            {needDataset ? "先检索再回答，回答带来源引用" : "直接回答，不检索"}
           </span>
         </div>
         {needDataset ? (
           <div className="w-56">
-            <Field label="知识库" hint="检索范围；回答里的 [n] 对应这里的第 n 条命中。">
+            <Field label="知识库" hint="检索范围；回答里的 [n] 对应来源列表的第 n 条。">
               <Select
                 value={datasetId}
                 onChange={(event) => setDatasetId(Number(event.target.value))}
@@ -177,21 +175,32 @@ export function ChatPanel({ app }: { app: AppInfo }) {
             </Field>
           </div>
         ) : null}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-end gap-3">
+          <span className="reading pb-2 text-xs text-ink-soft">
+            {conversationId > 0 ? `会话 #${conversationId}` : "新会话"}
+          </span>
           <Button onClick={handleNewConversation}>新会话</Button>
         </div>
       </header>
 
       {error ? (
-        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        <p className="rounded border border-fault/30 bg-fault-soft px-3 py-2 text-sm text-fault">
+          {error}
+        </p>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-xl border border-neutral-200 bg-white px-4 py-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto rounded border border-grid bg-white px-4 py-4">
         {messages.length === 0 ? (
-          <p className="m-auto text-xs text-neutral-400">
-            输入问题开始对话
-            {needDataset ? "（回答会给出引用的文档与页码）" : ""}
-          </p>
+          // 空状态是「邀请使用」的位置：给出具体可做的事，而不是一句「暂无数据」。
+          <div className="m-auto flex max-w-sm flex-col items-center gap-2 text-center">
+            <span className="eyebrow">还没有对话</span>
+            <p className="text-xs leading-5 text-ink-muted">
+              在下面输入问题开始。
+              {needDataset
+                ? "回答会先检索所选知识库，并列出引用到的文档与页码，可以逐条核对。"
+                : "当前应用不检索知识库，直接由对话模型回答。"}
+            </p>
+          </div>
         ) : null}
         {messages.map((message) => (
           <MessageBubble key={message.id} message={message} />
@@ -213,7 +222,7 @@ export function ChatPanel({ app }: { app: AppInfo }) {
               }}
               rows={2}
               placeholder="例如：用万用表测直流电压时要注意什么？"
-              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none transition-colors focus:border-neutral-500"
+              className="w-full rounded border border-grid bg-white px-3 py-2 text-sm text-ink outline-none transition-colors placeholder:text-ink-soft focus:border-pri"
             />
           </Field>
         </div>
@@ -238,7 +247,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-xl bg-neutral-900 px-3.5 py-2.5 text-sm leading-6 text-white">
+        <div className="max-w-[80%] rounded bg-ink px-3.5 py-2.5 text-sm leading-6 text-white">
           {message.content}
         </div>
       </div>
@@ -247,52 +256,54 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="max-w-[90%] self-start rounded-xl bg-neutral-50 px-3.5 py-2.5 text-sm leading-6 text-neutral-800">
+      <div className="max-w-[90%] self-start rounded border border-grid bg-paper px-3.5 py-2.5 text-sm leading-6 text-ink">
         {message.content === "" && message.streaming ? (
-          <span className="text-neutral-400">正在检索并组织回答…</span>
+          <span className="text-ink-soft">正在检索并组织回答…</span>
         ) : (
           <span className="whitespace-pre-wrap">{message.content}</span>
         )}
         {message.streaming && message.content !== "" ? (
-          <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-neutral-400 align-middle" />
+          <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-pri align-middle" />
         ) : null}
       </div>
 
       {message.citations && message.citations.length > 0 ? (
-        <div className="flex flex-col gap-1.5">
-          <span className="text-[11px] text-neutral-500">
-            引用来源（{message.citations.length} 条）
+        <div className="flex max-w-[90%] flex-col gap-1">
+          <span className="eyebrow !text-ink-soft">
+            引用来源 · {message.citations.length} 条
           </span>
-          <div className="flex flex-wrap gap-2">
+          {/* 来源做成可扫读的行：编号 + 文档名 + 页码 + 两阶段分数（等宽），
+              比一排胶囊标签更容易核对「第 3 条到底来自哪儿」。 */}
+          <ul className="divide-y divide-grid-soft rounded border border-grid bg-white">
             {message.citations.map((citation) => (
-              <span
+              <li
                 key={`${citation.index}-${citation.segmentId}`}
-                className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-[11px] text-neutral-600"
-                title={citationTooltip(citation)}
+                className="flex items-baseline gap-2 px-2.5 py-1.5"
               >
-                [{citation.index}] {citation.documentName}
-                {citation.page > 0 ? ` · 第 ${citation.page} 页` : ""}
-                {citation.titlePath.length > 0 ? ` · ${citation.titlePath.join("/")}` : ""}
-              </span>
+                <span className="reading w-6 shrink-0 text-[11px] text-ink-soft">
+                  [{citation.index}]
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[11px] text-ink-muted">
+                  {citation.documentName}
+                  {citation.page > 0 ? ` · 第 ${citation.page} 页` : ""}
+                  {citation.titlePath.length > 0 ? ` · ${citation.titlePath.join(" / ")}` : ""}
+                </span>
+                <span className="reading shrink-0 text-[10px] text-ink-soft">
+                  {citation.rerankScore !== undefined
+                    ? `向量 ${citation.score.toFixed(3)} · 重排 ${citation.rerankScore.toFixed(3)}`
+                    : `向量 ${citation.score.toFixed(3)}`}
+                </span>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       ) : null}
 
       {message.latencyMs !== undefined ? (
-        <span className="text-[11px] text-neutral-400">
-          耗时 {message.latencyMs} ms{message.model ? ` · ${message.model}` : ""}
+        <span className="reading text-[10px] text-ink-soft">
+          {message.latencyMs} ms{message.model ? ` · ${message.model}` : ""}
         </span>
       ) : null}
     </div>
   );
-}
-
-/** citationTooltip 把两阶段分数放进悬浮提示：需要核对召回质量时才看，平时不占地方。 */
-function citationTooltip(citation: CitationInfo): string {
-  const parts = [`片段 #${citation.segmentId}`, `向量分 ${citation.score.toFixed(4)}`];
-  if (citation.rerankScore !== undefined) {
-    parts.push(`重排分 ${citation.rerankScore.toFixed(4)}`);
-  }
-  return parts.join("｜");
 }

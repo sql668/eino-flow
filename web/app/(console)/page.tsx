@@ -6,6 +6,7 @@ import { useEffect } from "react";
 import { PageContainer } from "@/components/layout/page-container";
 import { HealthCheck } from "@/components/health-check";
 import { Panel } from "@/components/ui/field";
+import { Reading, ReadingRow } from "@/components/ui/reading";
 import { useModelConfigStore } from "@/stores/model-config-store";
 
 // 主页 = 控制台总览。
@@ -61,7 +62,7 @@ export default function HomePage() {
       </header>
 
       <Panel eyebrow="运行读数" title="当前生效的模型与服务">
-        <dl className="grid grid-cols-2 divide-grid sm:grid-cols-3 sm:divide-x">
+        <ReadingRow columns={3}>
           <Reading
             label="向量模型"
             value={effective?.modelName || "未配置"}
@@ -79,7 +80,7 @@ export default function HomePage() {
             }
             note="知识库问答用"
           />
-        </dl>
+        </ReadingRow>
         <div className="mt-3 flex items-center gap-3 border-t border-grid-soft pt-3">
           <span className="eyebrow !text-ink-soft">后端连通性</span>
           <HealthCheck />
@@ -133,18 +134,5 @@ export default function HomePage() {
         模块完成情况与未完成项见 docs/PROGRESS.md；规则见 AGENTS.md（含「开工前先对齐」与视觉方向）。
       </p>
     </PageContainer>
-  );
-}
-
-/** Reading 是仪表读数：大号等宽数字 + 说明，全站读数统一用这个形态。 */
-function Reading({ label, value, note }: { label: string; value: string; note?: string }) {
-  return (
-    <div className="flex flex-col gap-0.5 px-3 py-2 first:pl-0">
-      <dt className="eyebrow !text-ink-soft">{label}</dt>
-      <dd className="reading truncate text-[15px] font-semibold text-ink" title={value}>
-        {value}
-      </dd>
-      {note ? <span className="text-[10px] text-ink-soft">{note}</span> : null}
-    </div>
   );
 }

@@ -6,7 +6,7 @@ import { PageContainer } from "@/components/layout/page-container";
 import { DefaultModelPanel } from "@/components/model-config/default-model-panel";
 import { ProviderCard } from "@/components/model-config/provider-card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/field";
+import { Input, Panel } from "@/components/ui/field";
 import { useModelConfigStore } from "@/stores/model-config-store";
 
 // 模型供应商页。
@@ -52,24 +52,32 @@ export default function ModelSettingsPage() {
 
   return (
     <PageContainer className="flex flex-col gap-5 px-8 py-7">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold tracking-tight">模型供应商</h1>
-        <p className="text-sm leading-6 text-neutral-600">
-          厂商是内置的（Ollama / OpenAI 兼容接口 / TEI 重排服务），你只需要填服务地址与凭证。
-          凭证以 AES-256-GCM 加密存储，接口与页面只会看到掩码。
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <span className="eyebrow">模型配置</span>
+          <h1 className="text-[22px] font-semibold tracking-tight text-ink">厂商与模型</h1>
+          <p className="max-w-2xl text-sm leading-6 text-ink-muted">
+            厂商是内置的（Ollama / OpenAI 兼容接口 / DeepSeek / 重排服务），你只需填服务地址与凭证；
+            凭证以 AES-256-GCM 加密存储，接口与页面只返回掩码。
+          </p>
+        </div>
+        <span className="reading text-xs text-ink-soft">
+          {providers.length} 个厂商 · {models.length} 个模型
+        </span>
       </header>
 
       {error || notice ? (
         <div
-          className={`flex items-start justify-between gap-3 rounded-lg px-3 py-2 text-sm ${
-            error ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"
+          className={`flex items-start justify-between gap-3 rounded border px-3 py-2 text-sm ${
+            error
+              ? "border-fault/30 bg-fault-soft text-fault"
+              : "border-ok/30 bg-ok-soft text-ok"
           }`}
         >
           <span className="leading-6">{error || notice}</span>
           <button
             type="button"
-            className="text-xs text-neutral-500 hover:text-neutral-800"
+            className="text-xs text-ink-soft hover:text-ink"
             onClick={clearMessages}
           >
             关闭
@@ -77,7 +85,9 @@ export default function ModelSettingsPage() {
         </div>
       ) : null}
 
-      <DefaultModelPanel />
+      <Panel eyebrow="生效中" title="当前实际在用的模型">
+        <DefaultModelPanel />
+      </Panel>
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="w-72">
@@ -87,8 +97,8 @@ export default function ModelSettingsPage() {
             placeholder="搜索厂商或模型…"
           />
         </div>
-        <span className="text-xs text-neutral-500">
-          共 {providers.length} 个内置厂商，{matched.length} 个模型
+        <span className="reading text-xs text-ink-soft">
+          {matched.length} 个模型 · 已配置 {configured.length} 个厂商
         </span>
         <div className="ml-auto">
           <Button busy={loading} onClick={() => void loadAll()}>
@@ -98,9 +108,9 @@ export default function ModelSettingsPage() {
       </div>
 
       <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-medium text-neutral-500">已配置</h2>
+        <span className="eyebrow">已配置</span>
         {configured.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-neutral-300 px-4 py-6 text-center text-xs text-neutral-400">
+          <p className="rounded border border-dashed border-grid px-4 py-6 text-center text-xs text-ink-soft">
             {loading ? "加载中…" : "还没有配置任何厂商"}
           </p>
         ) : (
@@ -115,9 +125,9 @@ export default function ModelSettingsPage() {
       </section>
 
       <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-medium text-neutral-500">待配置</h2>
+        <span className="eyebrow">待配置</span>
         {unconfigured.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-neutral-300 px-4 py-6 text-center text-xs text-neutral-400">
+          <p className="rounded border border-dashed border-grid px-4 py-6 text-center text-xs text-ink-soft">
             内置厂商都已完成配置
           </p>
         ) : (
@@ -131,9 +141,9 @@ export default function ModelSettingsPage() {
         )}
       </section>
 
-      <p className="text-xs leading-5 text-neutral-500">
-        说明：换掉向量化模型会改变向量空间。维度不一致时后端会直接报错（不会静默写入），
-        此时需要清空向量集合后重新入库文档；重排模型可以随时替换，只会影响排序结果。
+      <p className="text-xs leading-5 text-ink-soft">
+        换掉向量模型会改变向量空间：维度不一致时后端会直接报错（不会静默写入），
+        此时需要重新入库文档；重排模型可以随时替换，只影响排序结果。
       </p>
     </PageContainer>
   );
