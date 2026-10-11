@@ -15,9 +15,12 @@
 .
 ├── backend/     # Go + Hertz + Eino 后端
 ├── web/         # Next.js 前端
-├── docs/        # PRD 与开发计划
+├── deploy/      # 本机重排服务、模型缓存等部署辅助
 └── docker-compose.yml
 ```
+
+> 需求文档、开发计划与进度台账放在本机的 `docs/` 目录（暂未纳入版本管理），
+> 因此 clone 下来的仓库里没有这个目录。
 
 ## 快速开始
 
