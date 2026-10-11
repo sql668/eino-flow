@@ -391,7 +391,11 @@ export interface KeywordConfig {
 /** 分段与清洗配置。 */
 export interface ChunkConfig {
   mode: ChunkMode;
-  separator: string;
+  /**
+   * 自定义分隔符列表（仅 separator 模式使用）。
+   * 界面上按「英文逗号分隔」输入，字面逗号写作 `\,`（见 components/chunk/separator-field.tsx）。
+   */
+  separators: string[];
   maxRunes: number;
   overlapRunes: number;
   minRunes: number;

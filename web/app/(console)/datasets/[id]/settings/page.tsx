@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { PageContainer } from "@/components/layout/page-container";
+import { SeparatorField } from "@/components/chunk/separator-field";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
 import { chunkApi, datasetsApi } from "@/lib/api/console";
@@ -207,6 +208,19 @@ export default function DatasetSettingsPage() {
                 父子分段功能尚未完成，敬请期待：子块用于检索、父块作为上下文。
                 当前请先选择其它模式。
               </p>
+            ) : null}
+            {/* 分隔符模式必须能在这里填分隔符：否则设置页选了「按自定义分隔符分段」
+                却没有任何输入入口，保存时只会收到后端的一句「必须填写分隔符」。 */}
+            {options.defaults.mode === "separator" ? (
+              <SeparatorField
+                value={options.defaults.separators}
+                onChange={(separators) =>
+                  setOptions({
+                    ...options,
+                    defaults: { ...options.defaults, separators },
+                  })
+                }
+              />
             ) : null}
             <div className="grid gap-3 sm:grid-cols-3">
               <Field label="分段长度上限" hint="字符数">

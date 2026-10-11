@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/field";
+import { SeparatorField } from "@/components/chunk/separator-field";
 import { ruleEnabled, rulePattern, useChunkWorkbenchStore } from "@/stores/chunk-workbench-store";
 import type { RetrievalConfig } from "@/types/api";
 
@@ -71,13 +72,10 @@ export function ChunkConfigPanel({ retrieval }: { retrieval: RetrievalConfig | n
         )}
 
         {config.mode === "separator" ? (
-          <Field label="分隔符" required hint={String.raw`例如空行写作 \n\n（按回车换行用 \n）`}>
-            <Input
-              value={config.separator}
-              onChange={(event) => setConfig({ separator: event.target.value })}
-              placeholder={String.raw`\n\n`}
-            />
-          </Field>
+          <SeparatorField
+            value={config.separators}
+            onChange={(separators) => setConfig({ separators })}
+          />
         ) : null}
 
         <div className="grid grid-cols-2 gap-3">

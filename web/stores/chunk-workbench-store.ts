@@ -56,7 +56,7 @@ interface ChunkWorkbenchState {
 /** emptyConfig 是加载完成前的占位配置。 */
 const emptyConfig: ChunkConfig = {
   mode: "title",
-  separator: "",
+  separators: [],
   maxRunes: 800,
   overlapRunes: 80,
   minRunes: 40,
@@ -161,7 +161,9 @@ export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => 
         // 逐条记录（FAQ、条款）：按空行分隔
         record: {
           mode: "separator",
-          separator: "\n\n",
+          // 预设给两个分隔符：空行是最常见的「一条记录」边界，
+          // 分隔线（----）则是纯文本导出里另一种常见写法。
+          separators: ["\\n\\n", "----"],
           maxRunes: 600,
           overlapRunes: 0,
           minRunes: 10,
