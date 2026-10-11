@@ -40,6 +40,8 @@ type SearchResult struct {
 	Query          string
 	TopK           int
 	EmbeddingModel string
+	// Mode 是本次实际使用的检索方式（向量 / 全文 / 混合）。
+	Mode repository.SearchMode
 	// RerankModel 为空表示本次未做重排；RerankSkipped 说明原因。
 	RerankModel   string
 	RerankSkipped string
@@ -148,6 +150,12 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 		TopK:          topK,
 		CandidateTopK: candidateTopK,
 		Rerank:        rerank,
+		// 检索方式与融合参数来自知识库配置：同 Dify 一样在知识库设置页选，
+		// 检索时不再让调用方重复指定（否则「设置页选了全文、接口却在做向量」）。
+		Mode:           retrievalConfig.SearchMode,
+		HybridRank:     retrievalConfig.HybridRank,
+		VectorWeight:   float64(retrievalConfig.VectorWeight),
+		FullTextWeight: float64(retrievalConfig.KeywordWeight),
 		// 阈值来自知识库配置：这是「问什么都给一段」的解法，配置页可改。
 		ScoreThreshold: retrievalConfig.ScoreThreshold,
 	})
@@ -157,6 +165,7 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 		Query:          query,
 		TopK:           topK,
 		EmbeddingModel: output.EmbeddingModel,
+		Mode:           output.Mode,
 		RerankModel:    output.RerankModel,
 		RerankSkipped:  output.RerankSkipped,
 		Recalled:       len(output.Candidates) + output.FilteredByThreshold,
@@ -201,6 +210,7 @@ func (s *RetrievalService) recordTrace(
 		TopK:           topK,
 		CandidateCount: recalled,
 		EmbeddingModel: output.EmbeddingModel,
+		SearchMode:     string(stageForMode(output.Mode)),
 		RerankModel:    output.RerankModel,
 		LatencyMS:      int(latency.Milliseconds()),
 		HitCount:       len(output.Hits),
@@ -221,13 +231,15 @@ func (s *RetrievalService) recordTrace(
 	hits := make([]*model.RetrievalHit, 0, len(output.Candidates)+len(output.Hits))
 	for _, hit := range output.Candidates {
 		hits = append(hits, &model.RetrievalHit{
-			RunID:      run.ID,
-			DatasetID:  datasetID,
-			SegmentID:  hit.SegmentID,
-			DocumentID: hit.DocumentID,
-			Rank:       hit.Rank,
-			Score:      hit.VectorScore,
-			Stage:      model.RetrievalStageVector,
+			RunID:         run.ID,
+			DatasetID:     datasetID,
+			SegmentID:     hit.SegmentID,
+			DocumentID:    hit.DocumentID,
+			Rank:          hit.Rank,
+			Score:         hit.Score,
+			VectorScore:   hit.VectorScore,
+			FullTextScore: hit.FullTextScore,
+			Stage:         stageForMode(output.Mode),
 		})
 	}
 	for _, hit := range output.Hits {
@@ -237,20 +249,37 @@ func (s *RetrievalService) recordTrace(
 			continue
 		}
 		hits = append(hits, &model.RetrievalHit{
-			RunID:       run.ID,
-			DatasetID:   datasetID,
-			SegmentID:   hit.SegmentID,
-			DocumentID:  hit.DocumentID,
-			Rank:        hit.Rank,
-			Score:       hit.VectorScore,
-			RerankScore: hit.RerankScore,
-			Stage:       model.RetrievalStageRerank,
+			RunID:         run.ID,
+			DatasetID:     datasetID,
+			SegmentID:     hit.SegmentID,
+			DocumentID:    hit.DocumentID,
+			Rank:          hit.Rank,
+			Score:         hit.Score,
+			VectorScore:   hit.VectorScore,
+			FullTextScore: hit.FullTextScore,
+			RerankScore:   hit.RerankScore,
+			Stage:         model.RetrievalStageRerank,
 		})
 	}
 	if err := s.traces.CreateHits(ctx, hits); err != nil {
 		return run.ID, err
 	}
 	return run.ID, nil
+}
+
+// stageForMode 把检索方式映射成留痕的阶段名。
+//
+// 两者取值刻意一致（vector / fulltext / hybrid）：留痕要回答的是
+// 「这次命中是哪条路线产生的」，用同一个词表才不会出现「模式叫 hybrid、阶段叫 fusion」的错位。
+func stageForMode(mode repository.SearchMode) model.RetrievalStage {
+	switch mode {
+	case repository.SearchModeFullText:
+		return model.RetrievalStageFullText
+	case repository.SearchModeHybrid:
+		return model.RetrievalStageHybrid
+	default:
+		return model.RetrievalStageVector
+	}
 }
 
 // truncateRunes 按字符数截断，避免中文被按字节切断产生半个字。

@@ -82,18 +82,21 @@ func newTestRetrievalService(
 func TestRetrievalService_SearchRecordsTrace(t *testing.T) {
 	// 构造两阶段数据：召回 3 条，重排后留 2 条，且顺序发生了变化。
 	// 这正是「两阶段分数落库」要还原的内容。
+	// 向量检索下排序分与向量路分数是同一个值，两者都要写进留痕。
+	scoreFirst, scoreSecond, scoreThird := float32(0.93), float32(0.81), float32(0.75)
 	rerankFirst, rerankSecond := float32(0.95), float32(0.60)
 	retriever := &fakeRetriever{output: rag.RetrieveOutput{
 		EmbeddingModel: "bge-m3:latest",
+		Mode:           model.SearchModeVector,
 		RerankModel:    "bge-reranker-v2-m3",
 		Candidates: []rag.Hit{
-			{SegmentID: 11, DocumentID: 1, DocumentName: "a.pdf", Rank: 1, VectorScore: 0.93, Content: "第一段", Page: 1},
-			{SegmentID: 22, DocumentID: 2, DocumentName: "b.pdf", Rank: 2, VectorScore: 0.81, Content: "第二段", Page: 3},
-			{SegmentID: 33, DocumentID: 3, DocumentName: "c.pdf", Rank: 3, VectorScore: 0.75, Content: "第三段", Page: 5},
+			{SegmentID: 11, DocumentID: 1, DocumentName: "a.pdf", Rank: 1, Score: scoreFirst, VectorScore: &scoreFirst, Content: "第一段", Page: 1},
+			{SegmentID: 22, DocumentID: 2, DocumentName: "b.pdf", Rank: 2, Score: scoreSecond, VectorScore: &scoreSecond, Content: "第二段", Page: 3},
+			{SegmentID: 33, DocumentID: 3, DocumentName: "c.pdf", Rank: 3, Score: scoreThird, VectorScore: &scoreThird, Content: "第三段", Page: 5},
 		},
 		Hits: []rag.Hit{
-			{SegmentID: 22, DocumentID: 2, DocumentName: "b.pdf", Rank: 1, VectorScore: 0.81, RerankScore: &rerankFirst, Content: "第二段", Page: 3},
-			{SegmentID: 11, DocumentID: 1, DocumentName: "a.pdf", Rank: 2, VectorScore: 0.93, RerankScore: &rerankSecond, Content: "第一段", Page: 1},
+			{SegmentID: 22, DocumentID: 2, DocumentName: "b.pdf", Rank: 1, Score: scoreSecond, VectorScore: &scoreSecond, RerankScore: &rerankFirst, Content: "第二段", Page: 3},
+			{SegmentID: 11, DocumentID: 1, DocumentName: "a.pdf", Rank: 2, Score: scoreFirst, VectorScore: &scoreFirst, RerankScore: &rerankSecond, Content: "第一段", Page: 1},
 		},
 	}}
 	traces := &fakeTraceRepo{}
@@ -129,6 +132,10 @@ func TestRetrievalService_SearchRecordsTrace(t *testing.T) {
 	}
 	if traces.run.RerankModel != "bge-reranker-v2-m3" {
 		t.Errorf("检索记录里的重排模型 = %q", traces.run.RerankModel)
+	}
+	// 检索方式必须留痕：同一个问题换个方式结果就变了，不记就解释不清差异。
+	if traces.run.SearchMode != string(model.SearchModeVector) {
+		t.Errorf("检索记录里的检索方式 = %q, 期望 vector", traces.run.SearchMode)
 	}
 	// 召回条数是重排前的数量（3），不是最终命中数（2）：两阶段都要能还原。
 	if traces.run.CandidateCount != 3 {
@@ -203,7 +210,7 @@ func TestRetrievalService_SearchTraceFailureDoesNotFailSearch(t *testing.T) {
 	traces := &fakeTraceRepo{err: errors.New("数据库抖动")}
 	retriever := &fakeRetriever{output: rag.RetrieveOutput{
 		EmbeddingModel: "bge-m3:latest",
-		Hits:           []rag.Hit{{SegmentID: 11, Rank: 1, VectorScore: 0.9, Content: "内容"}},
+		Hits:           []rag.Hit{{SegmentID: 11, Rank: 1, Score: 0.9, Content: "内容"}},
 	}}
 
 	result, err := newTestRetrievalService(&fakeDatasetRepo{}, retriever, traces).Search(

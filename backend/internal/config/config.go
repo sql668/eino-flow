@@ -36,6 +36,8 @@ type Config struct {
 	Milvus   MilvusConfig   `yaml:"milvus"`
 	MinIO    MinIOConfig    `yaml:"minio"`
 	MinerU   MinerUConfig   `yaml:"mineru"`
+	// Upload 是文件上传限制。
+	Upload UploadConfig `yaml:"upload"`
 	// Security 是安全相关配置（凭证加密密钥）。
 	Security SecurityConfig `yaml:"security"`
 	// Embedding / Retrieval 是模型与检索配置。
@@ -239,6 +241,24 @@ type MinIOConfig struct {
 	UseSSL    bool   `yaml:"use_ssl"`
 }
 
+// UploadConfig 描述上传限制。
+//
+// 为什么要有上限：上传内容会被整体读进内存再交给解析器，
+// 不设限时一个几百 MB 的文件就足以把 2C2G 的机器打满（先把服务打死，再报错）。
+type UploadConfig struct {
+	// MaxSizeMB 是单个文档的大小上限（MB）。
+	MaxSizeMB int `yaml:"max_size_mb"`
+}
+
+// MaxBytes 返回字节形式的上限（配置为 0 时取默认值）。
+func (u UploadConfig) MaxBytes() int64 {
+	sizeMB := u.MaxSizeMB
+	if sizeMB <= 0 {
+		sizeMB = defaultUploadMaxSizeMB
+	}
+	return int64(sizeMB) * 1024 * 1024
+}
+
 // MinerUConfig 描述文档解析服务（MinerU）配置。
 type MinerUConfig struct {
 	// BaseURL 是 MinerU V1 API 地址，例如 http://127.0.0.1:8000。
@@ -263,8 +283,9 @@ const (
 	defaultMinIOBucket   = "einoflow"
 
 	// 分段向量集合名。改名等于换一个库，旧集合不会自动清理，因此不要在部署中途随意改。
-	// v2：主键改为业务生成的 chunk_id（varchar）并补元数据字段（见 docs/PROGRESS.md）。
-	defaultMilvusCollection = "einoflow_segments_v2"
+	// v3：在 v2（chunk_id 主键 + 元数据）基础上，新增正文、关键词与 BM25 稀疏向量，
+	// 支撑全文检索与混合检索（见 docs/PROGRESS.md D12）。
+	defaultMilvusCollection = "einoflow_segments_v3"
 
 	// Embedding 默认指向本机 Ollama + bge-m3（1024 维），理由见 docs/PROGRESS.md D5。
 	defaultEmbeddingProvider  = "ollama"
@@ -289,6 +310,10 @@ const (
 	defaultMinerUBaseURL = "http://127.0.0.1:8000"
 	defaultMinerUTier    = "basic"
 	defaultMinerUTimeout = 15 * time.Minute
+
+	// 单个上传文档的默认大小上限（MB）。
+	// 100 MB 覆盖绝大多数手册 / 论文；扫描版大 PDF 需要调大时改配置即可。
+	defaultUploadMaxSizeMB = 100
 )
 
 // Load 读取配置。路径优先级为：显式入参 > 环境变量 EINOFLOW_CONFIG > 默认 configs/config.yaml。

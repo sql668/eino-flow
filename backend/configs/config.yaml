@@ -46,10 +46,12 @@ milvus:
   database: einoflow
   # 分段向量集合。所有知识库共用一个集合，靠 dataset_id 字段区分。
   #
-  # v2 与 v1 的差异：主键从 int64 分段 ID 换成业务生成的 chunk_id（varchar），
-  # 并新增 user_id / title_path / page / kind 等元数据字段。主键类型变了，
-  # 无法在原集合上改，因此换名重建。旧集合不会自动清理，需要时可手动删除。
-  collection: einoflow_segments_v2
+  # v1 → v2：主键从 int64 换成业务生成的 chunk_id（varchar），补元数据字段。
+  # v2 → v3：新增正文、关键词（都带中文分析器）与稀疏向量（BM25 函数自动生成），
+  #          支撑全文检索与混合检索。
+  # 每次都是 schema 层面的变化，无法在原集合上改，因此换名重建；
+  # 旧集合保留不删，需要时手动清理。
+  collection: einoflow_segments_v3
 
 # 向量化模型（Embedding）。当前指向本机 Ollama 的 bge-m3（1024 维），
 # 选型理由与实测数据见 docs/PROGRESS.md D5。
@@ -102,4 +104,10 @@ mineru:
   timeout: 15m         # 单文档解析等待上限，扫描件较慢
   chunk_max_runes: 800 # 切片长度上限（字符数）；留 0 用切片器默认值
   chunk_min_runes: 40  # 独立成段的最小长度；留 0 用切片器默认值
+
+# 上传限制。两层约束都按这个值走：
+#   * server.WithMaxRequestBodySize —— 读请求体时就拒绝，避免超大文件先占满内存再报错；
+#   * handler 内按文件大小再判一次 —— 返回可读的原因（带上限数值）。
+upload:
+  max_size_mb: 100
 

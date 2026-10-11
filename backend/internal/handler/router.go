@@ -17,6 +17,8 @@ type Deps struct {
 	Searches      *service.RetrievalService
 	ModelConfig   *service.ModelConfigService
 	Chats         *service.ChatService
+	// MaxUploadBytes 是单个上传文档的大小上限（0 表示不限制）。
+	MaxUploadBytes int64
 }
 
 // Register 把全部 HTTP 路由注册到 Hertz server。
@@ -27,7 +29,7 @@ func Register(h *server.Hertz, deps Deps) {
 	registerAppRoutes(apiV1, deps.Apps)
 	registerDatasetRoutes(apiV1, deps.Datasets)
 	registerConversationRoutes(apiV1, deps.Conversations)
-	registerDocumentRoutes(apiV1, deps.Documents)
+	registerDocumentRoutes(apiV1, deps.Documents, deps.MaxUploadBytes)
 	registerSearchRoutes(apiV1, deps.Searches)
 	registerModelConfigRoutes(apiV1, deps.ModelConfig)
 	registerChatRoutes(apiV1, deps.Chats)

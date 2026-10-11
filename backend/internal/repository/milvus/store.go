@@ -40,6 +40,15 @@ const (
 	fieldPage       = "page"
 	fieldKind       = "kind"
 	fieldEmbedding  = "embedding"
+	// fieldBM25Text 是 BM25 函数的唯一输入字段。
+	//
+	// Milvus 的 BM25 函数只接受**一个** VARCHAR 输入字段（传两个直接建集合失败），
+	// 所以写入时把「正文 + 关键词」拼成一段文本，交给服务端的中文分析器切词。
+	// 关键词因此真实参与词频与打分——人工调整关键词能改变全文/混合检索的命中。
+	// 正文与关键词的权威副本仍在 PostgreSQL，向量库里不重复保留它们。
+	fieldBM25Text  = "bm25_text"
+	fieldSparse    = "sparse"
+	bm25FunctionID = "bm25_text_index"
 )
 
 // 字符串字段长度上限。Milvus 要求 VarChar 显式声明 max_length。
@@ -48,6 +57,14 @@ const (
 	userIDMaxLen    = 64
 	titlePathMaxLen = 512
 	kindMaxLen      = 16
+	// contentMaxLen 是正文在 Milvus 里的长度上限（字节）。
+	// Milvus 的 VarChar 上限是 65535；这里按最大切片长度留足余量：
+	// 4000 字中文约 12 KB，取 32 KB 足够，也避免误配成超大值。
+	contentMaxLen = 32768
+	// keywordsMaxLen 是关键词部分的长度上限（5 个词，留足余量）。
+	keywordsMaxLen = 512
+	// bm25TextMaxLen 是 BM25 输入字段上限：正文上限 + 分隔符 + 关键词上限。
+	bm25TextMaxLen = contentMaxLen + keywordsMaxLen + 1
 )
 
 // HNSW 索引参数：
@@ -58,7 +75,15 @@ const (
 const (
 	hnswM              = 16
 	hnswEfConstruction = 200
+	// sparseDropRatio 是稀疏索引在构建时丢弃低权重词项的比例。
+	// 0.2 是常见折中：索引更小、构建更快，召回损失有限。
+	sparseDropRatio = 0.2
 )
+
+// chineseAnalyzerParams 是中文分析器参数。
+// 用 Milvus 内建的中文分析器：自己接 jieba 在 Go 里要么 CGO、要么引词典服务，
+// 而这里分词只需与 BM25 索引保持一致即可。
+var chineseAnalyzerParams = map[string]any{"type": "chinese"}
 
 // defaultDatabase 是 Milvus 内置的默认库名。
 const defaultDatabase = "default"
@@ -221,6 +246,26 @@ func (s *Store) createCollection(ctx context.Context, dim int) error {
 			WithName(fieldKind).
 			WithDataType(entity.FieldTypeVarChar).
 			WithMaxLength(kindMaxLen)).
+		// BM25 的输入字段必须开中文分析器：词元必须与查询侧同口径，
+		// 否则「索引按一种切法、查询按另一种切法」，检索会莫名其妙地漏。
+		WithField(entity.NewField().
+			WithName(fieldBM25Text).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(bm25TextMaxLen).
+			WithEnableAnalyzer(true).
+			WithAnalyzerParams(chineseAnalyzerParams)).
+		// 稀疏向量字段由 BM25 函数（下面注册）自动生成，写入时不提供。
+		WithField(entity.NewField().
+			WithName(fieldSparse).
+			WithDataType(entity.FieldTypeSparseVector)).
+		// BM25 函数必须注册在 schema 上（集合选项里没有对应方法）：
+		// 输入是拼接后的正文+关键词，输出到稀疏字段，词频与 IDF 由 Milvus 维护——
+		// 这正是我们决定「正文也进向量库」的唯一原因。
+		WithFunction(entity.NewFunction().
+			WithName(bm25FunctionID).
+			WithType(entity.FunctionTypeBM25).
+			WithInputFields(fieldBM25Text).
+			WithOutputFields(fieldSparse)).
 		WithField(entity.NewField().
 			WithName(fieldEmbedding).
 			WithDataType(entity.FieldTypeFloatVector).
@@ -240,6 +285,9 @@ func (s *Store) createCollection(ctx context.Context, dim int) error {
 			milvusclient.NewCreateIndexOption(s.collection, fieldDatasetID, index.NewInvertedIndex()),
 			milvusclient.NewCreateIndexOption(s.collection, fieldDocumentID, index.NewInvertedIndex()),
 			milvusclient.NewCreateIndexOption(s.collection, fieldUserID, index.NewInvertedIndex()),
+			// 稀疏向量索引：全文检索与混合检索走它。
+			milvusclient.NewCreateIndexOption(
+				s.collection, fieldSparse, index.NewSparseInvertedIndex(entity.BM25, sparseDropRatio)),
 		)
 
 	if err := s.client.CreateCollection(ctx, option); err != nil {
@@ -250,7 +298,10 @@ func (s *Store) createCollection(ctx context.Context, dim int) error {
 
 // load 把集合加载进内存。
 func (s *Store) load(ctx context.Context) error {
-	task, err := s.client.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(s.collection))
+	// 只加载检索真正需要的字段（见 loadFields 注释）：正文与关键词可能很大，
+	// 全量加载会让查询节点内存随语料线性增长——2C2G 的机器上这是致命的。
+	task, err := s.client.LoadCollection(ctx,
+		milvusclient.NewLoadCollectionOption(s.collection).WithLoadFields(loadFields...))
 	if err != nil {
 		return fmt.Errorf("加载向量集合 %s 失败: %w", s.collection, err)
 	}
@@ -258,6 +309,23 @@ func (s *Store) load(ctx context.Context) error {
 		return fmt.Errorf("等待向量集合 %s 加载完成失败: %w", s.collection, err)
 	}
 	return nil
+}
+
+// loadFields 是加载到查询节点的字段白名单。
+//
+// 刻意排除 bm25_text：它在**写入时**被 BM25 函数读取（分词与统计落在稀疏倒排里），
+// 检索阶段我们不需要原文——正文一律回 PostgreSQL 取。排除之后，
+// 查询节点的内存占用与「原文体积」脱钩（10 万篇文档不会因此多占 1 GB）。
+var loadFields = []string{
+	fieldChunkID,
+	fieldDocumentID,
+	fieldDatasetID,
+	fieldUserID,
+	fieldTitlePath,
+	fieldPage,
+	fieldKind,
+	fieldEmbedding,
+	fieldSparse,
 }
 
 // vectorDim 从集合结构中读出向量字段的维度。
@@ -297,6 +365,7 @@ func (s *Store) Upsert(ctx context.Context, records []repository.VectorRecord) e
 	titlePaths := make([]string, 0, len(records))
 	pages := make([]int64, 0, len(records))
 	kinds := make([]string, 0, len(records))
+	bm25Texts := make([]string, 0, len(records))
 	vectors := make([][]float32, 0, len(records))
 
 	for i, record := range records {
@@ -311,6 +380,7 @@ func (s *Store) Upsert(ctx context.Context, records []repository.VectorRecord) e
 		titlePaths = append(titlePaths, truncateVarchar(record.TitlePath, titlePathMaxLen))
 		pages = append(pages, int64(record.Page))
 		kinds = append(kinds, truncateVarchar(record.Kind, kindMaxLen))
+		bm25Texts = append(bm25Texts, buildBM25Text(record.Content, record.Keywords))
 		vectors = append(vectors, record.Vector)
 	}
 
@@ -323,6 +393,8 @@ func (s *Store) Upsert(ctx context.Context, records []repository.VectorRecord) e
 		column.NewColumnVarChar(fieldTitlePath, titlePaths),
 		column.NewColumnInt64(fieldPage, pages),
 		column.NewColumnVarChar(fieldKind, kinds),
+		column.NewColumnVarChar(fieldBM25Text, bm25Texts),
+		// 稀疏列不提供：BM25 函数会自动生成，手工传反而会冲突。
 		column.NewColumnFloatVector(fieldEmbedding, s.dim, vectors),
 	)
 
@@ -367,17 +439,42 @@ func (s *Store) deleteByExpr(ctx context.Context, expr string) (int64, error) {
 }
 
 // Search 实现 repository.VectorStore。
+//
+// 三种检索方式都走「服务端算分」：
+//   - vector：dense 向量近邻；
+//   - fulltext：Milvus 用集合的中文分析器把查询文本切词，对着 BM25 稀疏字段算分；
+//   - hybrid：两路并行召回，再按权重或 RRF 融合。
+//
+// 这样做的好处是分数量纲、去重、截断都由 Milvus 一次完成，
+// 我们不用在 Go 侧再实现一遍「按主键合并两路结果」这种容易写错的逻辑。
 func (s *Store) Search(
-	ctx context.Context, filter repository.SearchFilter, vector []float32,
+	ctx context.Context, filter repository.SearchFilter, query repository.SearchQuery,
 ) ([]repository.VectorMatch, error) {
-	if len(vector) == 0 {
-		return nil, errors.New("查询向量为空")
-	}
 	if filter.TopK <= 0 {
 		return nil, fmt.Errorf("TopK 必须为正数，当前为 %d", filter.TopK)
 	}
-	if s.dim > 0 && len(vector) != s.dim {
-		return nil, fmt.Errorf("%w: 查询向量是 %d 维，集合是 %d 维", model.ErrDimensionMismatch, len(vector), s.dim)
+	mode := query.Mode
+	if mode == "" {
+		mode = repository.SearchModeVector
+	}
+	if !mode.IsValid() {
+		return nil, fmt.Errorf("不支持的检索方式 %q（可选：vector / fulltext / hybrid）", mode)
+	}
+
+	// 按模式校验各自必需的入参：不校验的话会退化成「用空文本或空向量去查」，
+	// 表现为「检索没有结果」，而不是明确的参数错误。
+	switch mode {
+	case repository.SearchModeVector, repository.SearchModeHybrid:
+		if len(query.Vector) == 0 {
+			return nil, errors.New("查询向量为空")
+		}
+		if s.dim > 0 && len(query.Vector) != s.dim {
+			return nil, fmt.Errorf("%w: 查询向量是 %d 维，集合是 %d 维",
+				model.ErrDimensionMismatch, len(query.Vector), s.dim)
+		}
+	}
+	if mode != repository.SearchModeVector && strings.TrimSpace(query.Text) == "" {
+		return nil, errors.New("全文检索的查询文本为空")
 	}
 
 	expression, err := buildFilterExpression(filter)
@@ -385,22 +482,70 @@ func (s *Store) Search(
 		return nil, err
 	}
 
-	option := milvusclient.NewSearchOption(s.collection, filter.TopK, []entity.Vector{entity.FloatVector(vector)}).
+	switch mode {
+	case repository.SearchModeFullText:
+		resultSets, err := s.client.Search(ctx, milvusclient.
+			NewSearchOption(s.collection, filter.TopK, []entity.Vector{entity.Text(query.Text)}).
+			WithANNSField(fieldSparse).
+			WithFilter(expression).
+			WithConsistencyLevel(entity.ClStrong))
+		if err != nil {
+			return nil, fmt.Errorf("全文检索失败: %w", err)
+		}
+		return collectMatches(resultSets, filter.TopK, scoreRoute{fullText: true})
+
+	case repository.SearchModeHybrid:
+		// 两路各召回 TopK 条再融合：融合只能从两路各自的候选里挑，
+		// 每路召回数与最终条数一致才不会出现「融合后不够数」。
+		option := milvusclient.NewHybridSearchOption(s.collection, filter.TopK,
+			// 过滤条件挂在每一路上（融合接口本身不接受过滤条件）：
+			// 只给一路加过滤会让另一路召回越界内容，融合后照样出现在结果里。
+			milvusclient.NewAnnRequest(fieldEmbedding, filter.TopK, entity.FloatVector(query.Vector)).
+				WithFilter(expression),
+			milvusclient.NewAnnRequest(fieldSparse, filter.TopK, entity.Text(query.Text)).
+				WithFilter(expression),
+		).
+			WithReranker(hybridReranker(query)).
+			WithConsistencyLevel(entity.ClStrong)
+
+		resultSets, err := s.client.HybridSearch(ctx, option)
+		if err != nil {
+			return nil, fmt.Errorf("混合检索失败: %w", err)
+		}
+		// 融合后 Milvus 只返回融合分数，两路各自的分不再回传（服务端不做这项透出）。
+		// 因此这里只填 Score，两路分数留空——总比填一个错的值要好。
+		return collectMatches(resultSets, filter.TopK, scoreRoute{fused: true})
+	}
+
+	resultSets, err := s.client.Search(ctx, milvusclient.
+		NewSearchOption(s.collection, filter.TopK, []entity.Vector{entity.FloatVector(query.Vector)}).
 		WithANNSField(fieldEmbedding).
 		WithFilter(expression).
-		// Strong 一致性：入库后立刻检索要能看到刚写入的向量。
-		// 默认的 Bounded 会有秒级可见性延迟，演示与测试时会表现为「刚上传完搜不到」。
-		WithConsistencyLevel(entity.ClStrong)
-
-	resultSets, err := s.client.Search(ctx, option)
+		WithConsistencyLevel(entity.ClStrong))
 	if err != nil {
 		return nil, fmt.Errorf("向量检索失败: %w", err)
 	}
+	return collectMatches(resultSets, filter.TopK, scoreRoute{vector: true})
+}
 
-	matches := make([]repository.VectorMatch, 0, filter.TopK)
+// scoreRoute 描述本次检索走了哪一路，决定命中的分数往哪个字段填。
+type scoreRoute struct {
+	vector   bool
+	fullText bool
+	fused    bool
+}
+
+// collectMatches 把 Milvus 的检索结果整理成命中列表。
+//
+// 取结果集的第一组：单路检索只有一个结果集，混合检索的融合结果也在第一组。
+// 顺带把分数按路线填好，调用方据此展示「这条是向量命中的还是关键词命中的」。
+func collectMatches(
+	resultSets []milvusclient.ResultSet, limit int, route scoreRoute,
+) ([]repository.VectorMatch, error) {
+	matches := make([]repository.VectorMatch, 0, limit)
 	for _, set := range resultSets {
 		if set.Err != nil {
-			return nil, fmt.Errorf("向量检索返回错误: %w", set.Err)
+			return nil, fmt.Errorf("检索返回错误: %w", set.Err)
 		}
 		for i := 0; i < set.Len(); i++ {
 			chunkID, err := set.IDs.GetAsString(i)
@@ -411,10 +556,35 @@ func (s *Store) Search(
 			if i < len(set.Scores) {
 				score = set.Scores[i]
 			}
-			matches = append(matches, repository.VectorMatch{ChunkID: chunkID, Score: score})
+			match := repository.VectorMatch{ChunkID: chunkID, Score: score}
+			switch {
+			case route.vector:
+				value := score
+				match.VectorScore = &value
+			case route.fullText:
+				value := score
+				match.FullTextScore = &value
+			}
+			matches = append(matches, match)
 		}
 	}
 	return matches, nil
+}
+
+// hybridReranker 按配置选择混合检索的融合方式。
+//
+// RRF 只看排名不看分数，天然免疫「余弦相似度在 0~1、BM25 无上界」这种量纲差异；
+// 加权融合可解释、可调，但权重需要按语料调。两条路都留着让使用者自己选。
+func hybridReranker(query repository.SearchQuery) milvusclient.Reranker {
+	if query.Rank == repository.HybridRankRRF {
+		return milvusclient.NewRRFReranker()
+	}
+	vectorWeight, fullTextWeight := query.VectorWeight, query.FullTextWeight
+	if vectorWeight <= 0 && fullTextWeight <= 0 {
+		// 没给权重就按语义优先：中文短查询下向量检索通常更稳。
+		vectorWeight, fullTextWeight = 0.5, 0.5
+	}
+	return milvusclient.NewWeightedReranker([]float64{vectorWeight, fullTextWeight})
 }
 
 // buildFilterExpression 拼装 Milvus 过滤表达式。
@@ -460,6 +630,20 @@ func truncateVarchar(text string, maxLen int) string {
 	return truncated
 }
 
+// buildBM25Text 把正文与关键词拼成 BM25 的输入文本。
+//
+// 顺序固定为「正文在前、关键词在后」：分析器不看顺序，但排在前面的正文
+// 更长、更容易被截断，关键词放在尾部才能保证不被挤掉。
+// 关键词重复出现在尾部会让它的词频略高——这正是我们想要的加权效果。
+func buildBM25Text(content string, keywords []string) string {
+	text := truncateVarchar(content, contentMaxLen)
+	if len(keywords) == 0 {
+		return text
+	}
+	joined := truncateVarchar(strings.Join(keywords, " "), keywordsMaxLen)
+	return text + " " + joined
+}
+
 // Close 实现 repository.VectorStore。
 func (s *Store) Close(ctx context.Context) error {
 	if s.client == nil {
@@ -467,6 +651,15 @@ func (s *Store) Close(ctx context.Context) error {
 	}
 	return s.client.Close(ctx)
 }
+
+// 说明：这里**没有**提供「调用服务端分析器分词」的方法。
+//
+// 曾经打算用 Milvus 的中文分析器给关键词抽取供词（这样索引与关键词同口径），
+// 实测 Milvus 2.5.8 没有实现这个 RPC：调用 RunAnalyzer 返回
+// `Unimplemented ... unknown method RunAnalyzer`（该接口是更高版本才加的）。
+// 为了不把「本地能跑」变成「必须升级向量库」，关键词改由本地分词器处理
+// （见 engine/rag/keyword.LocalTokenizer）。检索侧不受影响：
+// 查询文本仍由服务端分析器切词，与索引口径一致。
 
 // Name 实现 repository.Dependency。
 func (s *Store) Name() string { return "Milvus" }

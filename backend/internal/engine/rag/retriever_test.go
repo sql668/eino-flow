@@ -88,11 +88,15 @@ func (f *fakeReranker) Rerank(_ context.Context, _ string, documents []string) (
 
 // fakeVectorStore 记录检索入参并返回预设命中。
 type fakeVectorStore struct {
-	matches     []repository.VectorMatch
-	searchErr   error
-	gotDataset  uint64
-	gotTopK     int
-	gotVector   []float32
+	matches    []repository.VectorMatch
+	searchErr  error
+	gotDataset uint64
+	gotTopK    int
+	gotVector  []float32
+	// gotMode / gotText 记录检索方式与查询文本：
+	// 全文检索不上送向量，只能靠这两个字段断言「调用方确实切到了全文模式」。
+	gotMode     repository.SearchMode
+	gotText     string
 	searchCalls int
 }
 
@@ -105,16 +109,32 @@ func (f *fakeVectorStore) Delete(context.Context, []string) (int64, error)      
 func (f *fakeVectorStore) Close(context.Context) error                             { return nil }
 
 func (f *fakeVectorStore) Search(
-	_ context.Context, filter repository.SearchFilter, vector []float32,
+	_ context.Context, filter repository.SearchFilter, query repository.SearchQuery,
 ) ([]repository.VectorMatch, error) {
 	f.searchCalls++
 	f.gotDataset = filter.DatasetID
-	f.gotVector = vector
+	f.gotVector = query.Vector
+	f.gotMode = query.Mode
+	f.gotText = query.Text
 	f.gotTopK = filter.TopK
 	if f.searchErr != nil {
 		return nil, f.searchErr
 	}
-	return f.matches, nil
+	// 替身按真实现的约定回填两路分数：向量模式填 VectorScore、全文模式填 FullTextScore、
+	// 混合模式两路都留空（Milvus 的融合结果不回传单路分）。
+	matches := make([]repository.VectorMatch, len(f.matches))
+	copy(matches, f.matches)
+	for i := range matches {
+		score := matches[i].Score
+		switch query.Mode {
+		case repository.SearchModeFullText:
+			matches[i].FullTextScore = &score
+		case repository.SearchModeHybrid:
+		default:
+			matches[i].VectorScore = &score
+		}
+	}
+	return matches, nil
 }
 
 // fakeSegmentRepo 只实现检索需要的那一个方法，其余方法直接 panic：
@@ -134,7 +154,10 @@ func (f *fakeSegmentRepo) List(context.Context, repository.SegmentListFilter) ([
 func (f *fakeSegmentRepo) DeleteByDocument(context.Context, uint64) (int64, error) {
 	panic("未预期调用")
 }
-func (f *fakeSegmentRepo) AttachVectorIDs(context.Context, uint64) (int64, error) {
+func (f *fakeSegmentRepo) GetByID(context.Context, uint64, uint64) (*domainmodel.Segment, error) {
+	panic("未预期调用")
+}
+func (f *fakeSegmentRepo) UpdateKeywords(context.Context, uint64, uint64, []string) error {
 	panic("未预期调用")
 }
 
@@ -384,7 +407,7 @@ func TestRetriever_Rerank(t *testing.T) {
 		t.Errorf("排名未重排: [%d %d]", out.Hits[0].Rank, out.Hits[1].Rank)
 	}
 	// 两个阶段的分数都要在：向量分说明「召回时排第几」，重排分说明「精排怎么看」。
-	if out.Hits[0].VectorScore != 0.70 {
+	if out.Hits[0].VectorScore == nil || *out.Hits[0].VectorScore != 0.70 {
 		t.Errorf("向量分数 = %v, 期望保留召回阶段的 0.70", out.Hits[0].VectorScore)
 	}
 	if out.Hits[0].RerankScore == nil || *out.Hits[0].RerankScore != 0.95 {

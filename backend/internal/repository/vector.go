@@ -1,6 +1,10 @@
 package repository
 
-import "context"
+import (
+	"context"
+
+	"einoflow-backend/internal/model"
+)
 
 // VectorRecord 是一条待写入向量库的记录。
 //
@@ -26,6 +30,15 @@ type VectorRecord struct {
 	Page int
 	// Kind 是片段类型：text / table。
 	Kind string
+	// Content 是片段正文。
+	//
+	// 存进向量库**只为一件事**：BM25 稀疏检索需要服务端掌握词频与 IDF，
+	// 拿不到正文就只能自己维护统计（那是另一个需要持续维护的状态）。
+	// 业务库仍是正文的权威来源，检索时也不回传这个字段（见 LoadFields）。
+	Content string
+	// Keywords 是片段关键词。写入时与正文拼成 BM25 的输入文本——
+	// 人工调整关键词因此能真实影响全文与混合检索的召回。
+	Keywords []string
 	// Vector 是文本向量。
 	Vector []float32
 }
@@ -34,8 +47,53 @@ type VectorRecord struct {
 type VectorMatch struct {
 	// ChunkID 命中片段的主键，回查 PostgreSQL 用它。
 	ChunkID string
-	// Score 是相似度分数（余弦距离下越大越相似）。
+	// Score 是参与排序的最终分数：单路检索时就是该路的分数，
+	// 混合检索时是两路融合后的分数。不同模式的绝对值不可横向比较
+	// （余弦相似度在 0~1，BM25 是无上界的打分，融合分又是另一个量纲）。
 	Score float32
+	// VectorScore 是向量路分数；该路未参与本次检索时为空。
+	VectorScore *float32
+	// FullTextScore 是全文（BM25）路分数；该路未参与本次检索时为空。
+	//
+	// 两路分数都往回带，是为了让「混合检索到底是谁把这条提上来的」
+	// 在检索留痕与界面上可查——只留一个融合分数等于把这个信息丢掉了。
+	FullTextScore *float32
+}
+
+// 检索方式与融合方式的取值定义在 model（领域词汇），这里只做别名，
+// 让向量库实现的签名短一些，语义与 model 完全一致。
+type (
+	SearchMode = model.SearchMode
+	HybridRank = model.HybridRank
+)
+
+const (
+	SearchModeVector   = model.SearchModeVector
+	SearchModeFullText = model.SearchModeFullText
+	SearchModeHybrid   = model.SearchModeHybrid
+
+	HybridRankWeighted = model.HybridRankWeighted
+	HybridRankRRF      = model.HybridRankRRF
+)
+
+// SearchQuery 是一次检索的查询侧入参。
+//
+// 把「文本 / 向量 / 融合方式」收在一个结构里，而不是给 Search 加一长串参数：
+// 不同模式用到的字段不同（全文不需要向量，向量检索也不需要文本），
+// 收成结构后由实现按模式取用，调用方不用记参数顺序。
+type SearchQuery struct {
+	// Text 是已清洗的查询文本，全文与混合检索用它（切词由向量库的分析器完成）。
+	Text string
+	// Vector 是查询向量，向量与混合检索用它。
+	Vector []float32
+	// Mode 是检索方式；空值按向量检索处理。
+	Mode SearchMode
+	// Rank 是混合检索的融合方式；空值按加权处理。
+	Rank HybridRank
+	// VectorWeight / FullTextWeight 是加权融合时两路的权重（[0,1]，和不必为 1，
+	// 实现会归一化）。仅为 0 时按 0.5 / 0.5 处理。
+	VectorWeight   float64
+	FullTextWeight float64
 }
 
 // SearchFilter 是向量检索的过滤条件。
@@ -66,8 +124,9 @@ type VectorStore interface {
 	DeleteByDocument(ctx context.Context, documentID uint64) (int64, error)
 	// Delete 按片段主键删除向量，用于单段删除。
 	Delete(ctx context.Context, chunkIDs []string) (int64, error)
-	// Search 按过滤条件做向量相似度检索，返回按相似度降序的命中。
-	Search(ctx context.Context, filter SearchFilter, vector []float32) ([]VectorMatch, error)
+	// Search 按过滤条件做检索，返回按相关性降序的命中。
+	// 支持向量 / 全文 / 混合三种方式（见 SearchQuery.Mode）。
+	Search(ctx context.Context, filter SearchFilter, query SearchQuery) ([]VectorMatch, error)
 	// Close 释放连接。
 	Close(ctx context.Context) error
 }

@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"mime"
 	"strings"
 
@@ -24,6 +25,7 @@ import (
 
 	"einoflow-backend/internal/engine/rag/chunker"
 	"einoflow-backend/internal/engine/rag/cleaner"
+	"einoflow-backend/internal/engine/rag/keyword"
 	"einoflow-backend/internal/engine/rag/loader"
 	// 别名：本文件同时用到领域模型（internal/model），两个包同名必须区分开。
 	enginemodel "einoflow-backend/internal/engine/model"
@@ -40,6 +42,11 @@ const (
 	// 界面一次展示不了几百条，而把上千条片段塞进一份 JSON 响应既慢又占内存；
 	// 总条数放在统计里返回，界面显示「共 N 段，预览前 M 段」。
 	previewChunkLimit = 50
+	// vectorBatchSize 是单次向量化与写入向量库的片段数上限。
+	//
+	// 一次几百段是实测量级：再大请求体与显存/内存占用都会明显上升，
+	// 而一次失败要重来的代价也成倍增长（几百页的 PDF 会产生上千段）。
+	vectorBatchSize = 500
 )
 
 // previewErrorLimit 与 error_message 列长度一致，截断后再落库。
@@ -56,6 +63,8 @@ type Pipeline struct {
 	// 前者用接口而不是具体实现：模型来源从配置文件换成数据库时这里不用改。
 	models  enginemodel.Resolver
 	vectors repository.VectorStore
+	// keywords 抽取关键词；为空表示不做抽取（分段关键词留空数组）。
+	keywords keyword.Extractor
 }
 
 // Deps 是流水线依赖。
@@ -67,6 +76,9 @@ type Deps struct {
 	Resolver  *loader.Resolver
 	Models    enginemodel.Resolver
 	Vectors   repository.VectorStore
+	// Keywords 是关键词抽取器，一般用 keyword.NewTFIDF(向量库) 构造：
+	// 分词与 BM25 索引共用同一个分析器，避免「关键词里有的词检索却搜不到」。
+	Keywords keyword.Extractor
 }
 
 // NewPipeline 构造流水线。
@@ -79,6 +91,7 @@ func NewPipeline(deps Deps) *Pipeline {
 		resolver:  deps.Resolver,
 		models:    deps.Models,
 		vectors:   deps.Vectors,
+		keywords:  deps.Keywords,
 	}
 }
 
@@ -267,8 +280,11 @@ func (p *Pipeline) run(ctx context.Context, doc *model.Document, config model.Ch
 	}
 
 	version := config.Version()
+	// 关键词按「整篇文档一次抽」：TF-IDF 的逆文档频率要在本文档的所有片段上统计，
+	// 一段一段抽会退化成「词频排序」，手册里满篇出现的词反而会被选成关键词。
+	keywords := p.extractKeywords(ctx, chunkResult.Chunks, config)
 	segments := make([]*model.Segment, 0, len(chunkResult.Chunks))
-	for _, item := range chunkResult.Chunks {
+	for i, item := range chunkResult.Chunks {
 		segments = append(segments, &model.Segment{
 			// chunk_id 由业务生成：它同时是向量库主键，检索拿它回查本表。
 			ChunkID:            uuid.NewString(),
@@ -286,6 +302,7 @@ func (p *Pipeline) run(ctx context.Context, doc *model.Document, config model.Ch
 			Locator:            item.Locator,
 			Kind:               item.Kind,
 			TitlePath:          nonNilStrings(item.TitlePath),
+			Keywords:           nonNilStrings(keywords[i]),
 		})
 	}
 
@@ -383,38 +400,189 @@ func (p *Pipeline) vectorize(ctx context.Context, doc *model.Document, segments 
 		return err
 	}
 
-	texts := make([]string, 0, len(segments))
-	for _, segment := range segments {
-		texts = append(texts, segment.Content)
-	}
-	vectors, err := embedder.Embed(ctx, texts)
-	if err != nil {
-		return fmt.Errorf("向量化分段失败: %w", err)
-	}
-	if len(vectors) != len(segments) {
-		return fmt.Errorf("向量数量（%d）与分段数量（%d）不一致", len(vectors), len(segments))
-	}
-
-	records := make([]repository.VectorRecord, 0, len(segments))
-	for i, segment := range segments {
-		records = append(records, repository.VectorRecord{
-			ChunkID:    segment.ChunkID,
-			DatasetID:  doc.DatasetID,
-			DocumentID: doc.ID,
-			UserID:     doc.UserID,
-			// 章节路径在向量库里存拼接形式：检索结果直接可展示，也能用于过滤。
-			TitlePath: strings.Join(segment.TitlePath, " / "),
-			Page:      segment.Page,
-			Kind:      segment.Kind,
-			Vector:    vectors[i],
-		})
-	}
-
+	// 先删旧向量再写新的：反过来会把刚写入的向量连带删掉（同文档重建索引的场景）。
 	if _, err := p.vectors.DeleteByDocument(ctx, doc.ID); err != nil {
 		return err
 	}
-	return p.vectors.Upsert(ctx, records)
+
+	// 分批向量化 + 分批写入：一次几千段会把请求体、内存与超时风险都放大几十倍，
+	// 而分批后进度可观察、失败可定位（错误信息里带上批次区间）。
+	for start := 0; start < len(segments); start += vectorBatchSize {
+		end := min(start+vectorBatchSize, len(segments))
+		batch := segments[start:end]
+
+		texts := make([]string, 0, len(batch))
+		for _, segment := range batch {
+			texts = append(texts, segment.Content)
+		}
+		vectors, err := embedder.Embed(ctx, texts)
+		if err != nil {
+			return fmt.Errorf("向量化分段失败（第 %d~%d 段）: %w", start+1, end, err)
+		}
+		if len(vectors) != len(batch) {
+			return fmt.Errorf("向量数量（%d）与分段数量（%d）不一致（第 %d~%d 段）",
+				len(vectors), len(batch), start+1, end)
+		}
+
+		records := make([]repository.VectorRecord, 0, len(batch))
+		for i, segment := range batch {
+			records = append(records, repository.VectorRecord{
+				ChunkID:    segment.ChunkID,
+				DatasetID:  doc.DatasetID,
+				DocumentID: doc.ID,
+				UserID:     doc.UserID,
+				// 章节路径在向量库里存拼接形式：检索结果直接可展示，也能用于过滤。
+				TitlePath: strings.Join(segment.TitlePath, " / "),
+				Page:      segment.Page,
+				Kind:      segment.Kind,
+				// 正文与关键词一起进 BM25 输入字段：关键词在尾部重复出现，
+				// 词频略高即等于给关键词加权，这正是「改关键词能影响检索」的实现方式。
+				Content:  segment.Content,
+				Keywords: segment.Keywords,
+				Vector:   vectors[i],
+			})
+		}
+		if err := p.vectors.Upsert(ctx, records); err != nil {
+			return fmt.Errorf("写入向量失败（第 %d~%d 段）: %w", start+1, end, err)
+		}
+	}
+	return nil
 }
+
+// extractKeywords 为整篇文档的片段抽取关键词，返回与入参一一对应的结果。
+//
+// 抽取失败**不让入库失败**：关键词是辅助信息（展示 + 全文检索的一路权重），
+// 它挂掉时用户拿到的仍是一份可检索的文档。但失败必须留下日志，
+// 否则「关键词为什么是空的」会变成新的谜题。
+func (p *Pipeline) extractKeywords(
+	ctx context.Context, chunks []chunker.Chunk, config model.ChunkConfig,
+) [][]string {
+	empty := make([][]string, len(chunks))
+	if p.keywords == nil {
+		return empty
+	}
+	// 配置为 nil 视为默认开启：字段是后加的，老配置里没有它（见 model.KeywordConfig）。
+	keywordConfig := model.KeywordConfigDefault()
+	if config.Keywords != nil {
+		keywordConfig = config.Keywords.Normalize()
+	}
+	if !keywordConfig.Enabled {
+		return empty
+	}
+
+	texts := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		texts = append(texts, chunk.Content)
+	}
+	extracted, err := p.keywords.Extract(ctx, texts, keywordConfig.MaxCount)
+	if err != nil {
+		log.Printf("抽取分段关键词失败（%d 段），本次入库不生成关键词: %v", len(chunks), err)
+		return empty
+	}
+	if len(extracted) != len(chunks) {
+		// 条数不一致说明抽取器行为异常，宁可全部留空也不要错位配对：
+		// 错位会把 A 段的关键词写到 B 段上，而且看起来完全正常。
+		log.Printf("抽取分段关键词返回 %d 条，期望 %d 条，本次入库不生成关键词", len(extracted), len(chunks))
+		return empty
+	}
+	for i := range extracted {
+		if extracted[i] == nil {
+			extracted[i] = []string{}
+		}
+	}
+	return extracted
+}
+
+// UpdateSegmentKeywords 覆盖单个分段的关键词，并同步到向量库的 BM25 输入文本。
+//
+// 之所以还要动向量库：关键词是全文/混合检索的输入之一，只改业务库的话，
+// 界面显示的关键词与实际参与检索的内容就不一致了——这种不一致最难排查。
+// 同步方式是按新关键词重新向量化这一条（单条开销可忽略），再覆盖写入。
+func (p *Pipeline) UpdateSegmentKeywords(
+	ctx context.Context, datasetID uint64, segmentID uint64, keywords []string,
+) (*model.Segment, error) {
+	segment, err := p.segments.GetByID(ctx, datasetID, segmentID)
+	if err != nil {
+		return nil, err
+	}
+	cleaned := normalizeKeywords(keywords)
+	if err := p.segments.UpdateKeywords(ctx, datasetID, segmentID, cleaned); err != nil {
+		return nil, err
+	}
+	segment.Keywords = cleaned
+
+	if err := p.syncSegmentVector(ctx, segment); err != nil {
+		// 业务库已改、向量库没跟上，必须让调用方知道：否则使用者以为改生效了，
+		// 而检索仍然按旧关键词走。返回错误让界面明确提示重试。
+		return segment, fmt.Errorf("关键词已保存，但同步检索索引失败（请重试）: %w", err)
+	}
+	return segment, nil
+}
+
+// syncSegmentVector 用片段当前的内容与关键词覆盖写一条向量记录。
+func (p *Pipeline) syncSegmentVector(ctx context.Context, segment *model.Segment) error {
+	doc, err := p.documents.GetByID(ctx, segment.DocumentID)
+	if err != nil {
+		return fmt.Errorf("读取文档记录失败: %w", err)
+	}
+	embedder, err := p.models.Embedder(ctx, enginemodel.ScopeRef{DatasetID: segment.DatasetID})
+	if err != nil {
+		return fmt.Errorf("获取向量化模型失败: %w", err)
+	}
+	if err := p.vectors.EnsureCollection(ctx, embedder.Dimension()); err != nil {
+		return err
+	}
+	vectors, err := embedder.Embed(ctx, []string{segment.Content})
+	if err != nil {
+		return fmt.Errorf("向量化分段失败: %w", err)
+	}
+	if len(vectors) != 1 {
+		return fmt.Errorf("向量化分段返回 %d 条向量，期望 1 条", len(vectors))
+	}
+	return p.vectors.Upsert(ctx, []repository.VectorRecord{{
+		ChunkID:    segment.ChunkID,
+		DatasetID:  segment.DatasetID,
+		DocumentID: segment.DocumentID,
+		UserID:     doc.UserID,
+		TitlePath:  strings.Join(segment.TitlePath, " / "),
+		Page:       segment.Page,
+		Kind:       segment.Kind,
+		Content:    segment.Content,
+		Keywords:   segment.Keywords,
+		Vector:     vectors[0],
+	}})
+}
+
+// normalizeKeywords 清洗人工输入的关键词。
+//
+// 去空白、去空串、去重、限长：关键词会进入 BM25 输入文本与界面展示，
+// 脏数据（空串、重复、超长）会让展示错乱，也会污染词频统计。
+func normalizeKeywords(keywords []string) []string {
+	seen := make(map[string]struct{}, len(keywords))
+	out := make([]string, 0, len(keywords))
+	for _, item := range keywords {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if len([]rune(trimmed)) > maxKeywordRunes {
+			trimmed = string([]rune(trimmed)[:maxKeywordRunes])
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) > model.MaxKeywordMaxCount {
+		out = out[:model.MaxKeywordMaxCount]
+	}
+	return out
+}
+
+// maxKeywordRunes 是单个关键词的长度上限（字符数）。
+// 超过这个长度的「关键词」多半是使用者整段粘贴进来的，展示不下也不像关键词。
+const maxKeywordRunes = 32
 
 // toChunkOptions 把知识库配置转成切片参数。
 func toChunkOptions(config model.ChunkConfig) chunker.Options {

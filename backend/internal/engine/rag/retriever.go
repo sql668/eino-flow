@@ -28,7 +28,17 @@ type RetrieveRequest struct {
 	// 阈值作用在**向量分数**上而不是重排分数：两者的量纲不同
 	// （向量是余弦相似度，重排是归一化后的相关性），配置里给的 0.5 这类值
 	// 按语义就是针对召回阶段的；先筛再重排也顺带省掉无关候选的重排开销。
+	//
+	// 只在向量检索模式下生效：全文检索的 BM25 分数无上界、
+	// 混合检索拿到的是融合分数，拿余弦阈值去卡它们没有意义。
 	ScoreThreshold float32
+	// Mode 是检索方式（向量 / 全文 / 混合）；空值按向量检索处理。
+	Mode repository.SearchMode
+	// HybridRank 是混合检索两路结果的融合方式（加权 / RRF）。
+	HybridRank repository.HybridRank
+	// VectorWeight / FullTextWeight 是加权融合的两路权重。
+	VectorWeight   float64
+	FullTextWeight float64
 }
 
 // Hit 是一个命中片段，带齐前端展示引用所需的溯源信息。
@@ -45,10 +55,16 @@ type Hit struct {
 	Content      string
 	// Rank 是本次检索内的排名，从 1 开始。
 	Rank int
-	// VectorScore 是向量相似度（余弦，越大越相似）。
-	// 两个分数都返回而不是只返回最终分：使用者才能判断「重排把哪一条提上来了」，
-	// 这也是「检索可追溯」要展示的内容之一。
-	VectorScore float32
+	// Score 是决定本次召回的分数：单路检索时是该路的分数，
+	// 混合检索时是两路融合后的分数。它只用于说明「为什么排在第 N 位」。
+	Score float32
+	// VectorScore / FullTextScore 是两路各自的分数；该路未参与或服务端未回传时为空。
+	//
+	// 多个分数都返回而不是只返回最终分：使用者才能判断
+	// 「这条是语义命中还是关键词命中」「重排把哪一条提上来了」——
+	// 这也是「检索可追溯」要展示的内容。
+	VectorScore   *float32
+	FullTextScore *float32
 	// RerankScore 是重排分数；未做重排时为空。
 	RerankScore *float32
 	ChunkIndex  int
@@ -67,6 +83,8 @@ type RetrieveOutput struct {
 	// EmbeddingModel 是本次使用的向量模型。
 	// 检索记录要落库（见 docs/PROGRESS.md D6），换模型后要能解释「为什么结果变了」。
 	EmbeddingModel string
+	// Mode 是本次实际使用的检索方式（留痕要记，否则「同问题不同结果」无从解释）。
+	Mode repository.SearchMode
 	// RerankModel 是本次使用的重排模型；未做重排时为空。
 	RerankModel string
 	// RerankSkipped 记录「为什么没做重排」（未配置 / 被显式关闭）。
@@ -147,35 +165,58 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 		candidateTopK = topK
 	}
 
-	// 用与入库同一个作用域解析模型：知识库级覆盖必须两边一致，
-	// 一边用 A 模型入库、一边用 B 模型检索，向量不在同一空间，检索结果就是噪声。
-	embedder, err := r.models.Embedder(ctx, model.ScopeRef{DatasetID: req.DatasetID})
-	if err != nil {
-		return RetrieveOutput{}, fmt.Errorf("获取向量化模型失败: %w", err)
+	mode := req.Mode
+	if mode == "" {
+		mode = repository.SearchModeVector
+	}
+	if !mode.IsValid() {
+		return RetrieveOutput{}, fmt.Errorf("不支持的检索方式 %q（可选：vector / fulltext / hybrid）", mode)
 	}
 
-	// 查询与入库必须用同一个模型，否则两边向量不在同一空间，检索结果会退化成随机噪声。
-	// 这正是把模型解析收敛到 resolver 的原因：换模型时入库与检索一起换。
-	vectors, err := embedder.Embed(ctx, []string{query})
-	if err != nil {
-		return RetrieveOutput{}, fmt.Errorf("向量化检索内容失败: %w", err)
+	// 全文检索不需要查询向量。这里刻意跳过向量化：
+	// 一是省一次模型调用（本机 8B 之外的 embedding 也有百毫秒级开销），
+	// 二是「没配 embedding 也能全文检索」在部署早期是有意义的。
+	searchQuery := repository.SearchQuery{
+		Text:           query,
+		Mode:           mode,
+		Rank:           req.HybridRank,
+		VectorWeight:   req.VectorWeight,
+		FullTextWeight: req.FullTextWeight,
 	}
-	if len(vectors) != 1 {
-		return RetrieveOutput{}, fmt.Errorf("向量化检索内容返回了 %d 条向量，期望 1 条", len(vectors))
+	output := RetrieveOutput{
+		Mode:           mode,
+		Hits:           []Hit{},
+		EmbeddingModel: "",
+	}
+	if mode != repository.SearchModeFullText {
+		// 用与入库同一个作用域解析模型：知识库级覆盖必须两边一致，
+		// 一边用 A 模型入库、一边用 B 模型检索，向量不在同一空间，检索结果就是噪声。
+		embedder, err := r.models.Embedder(ctx, model.ScopeRef{DatasetID: req.DatasetID})
+		if err != nil {
+			return RetrieveOutput{}, fmt.Errorf("获取向量化模型失败: %w", err)
+		}
+
+		// 查询与入库必须用同一个模型，否则两边向量不在同一空间，检索结果会退化成随机噪声。
+		// 这正是把模型解析收敛到 resolver 的原因：换模型时入库与检索一起换。
+		vectors, err := embedder.Embed(ctx, []string{query})
+		if err != nil {
+			return RetrieveOutput{}, fmt.Errorf("向量化检索内容失败: %w", err)
+		}
+		if len(vectors) != 1 {
+			return RetrieveOutput{}, fmt.Errorf("向量化检索内容返回了 %d 条向量，期望 1 条", len(vectors))
+		}
+		searchQuery.Vector = vectors[0]
+		output.EmbeddingModel = embedder.Name()
 	}
 
 	matches, err := r.vectors.Search(ctx, repository.SearchFilter{
 		DatasetID: req.DatasetID,
 		TopK:      candidateTopK,
-	}, vectors[0])
+	}, searchQuery)
 	if err != nil {
 		return RetrieveOutput{}, err
 	}
-	output := RetrieveOutput{
-		EmbeddingModel: embedder.Name(),
-		Hits:           []Hit{},
-		Candidates:     []Hit{},
-	}
+	output.Candidates = []Hit{}
 	if len(matches) == 0 {
 		return output, nil
 	}
@@ -204,30 +245,32 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 		}
 		segment := item.Segment
 		output.Candidates = append(output.Candidates, Hit{
-			ChunkID:      segment.ChunkID,
-			SegmentID:    segment.ID,
-			DocumentID:   segment.DocumentID,
-			DocumentName: item.DocumentName,
-			Content:      segment.Content,
-			Rank:         len(output.Candidates) + 1,
-			VectorScore:  match.Score,
-			ChunkIndex:   segment.ChunkIndex,
-			Page:         segment.Page,
-			Locator:      segment.Locator,
-			Kind:         segment.Kind,
-			TitlePath:    segment.TitlePath,
+			ChunkID:       segment.ChunkID,
+			SegmentID:     segment.ID,
+			DocumentID:    segment.DocumentID,
+			DocumentName:  item.DocumentName,
+			Content:       segment.Content,
+			Rank:          len(output.Candidates) + 1,
+			Score:         match.Score,
+			VectorScore:   match.VectorScore,
+			FullTextScore: match.FullTextScore,
+			ChunkIndex:    segment.ChunkIndex,
+			Page:          segment.Page,
+			Locator:       segment.Locator,
+			Kind:          segment.Kind,
+			TitlePath:     segment.TitlePath,
 		})
 	}
 	if len(output.Candidates) == 0 {
 		return output, nil
 	}
 
-	// 相似度阈值过滤：在重排之前做，且把筛掉的数量带回去。
-	// bge-m3 对无关内容也会给出 0.45 左右的分数，不设阈值时「问什么都有一段最像的」。
-	if req.ScoreThreshold > 0 {
+	// 相似度阈值过滤：只对向量检索生效（原因见 RetrieveRequest.ScoreThreshold）。
+	// 全文检索没有相似度可言；混合检索拿到的是融合分数，同样卡不住。
+	if req.ScoreThreshold > 0 && mode == repository.SearchModeVector {
 		kept := output.Candidates[:0:0]
 		for _, hit := range output.Candidates {
-			if hit.VectorScore >= req.ScoreThreshold {
+			if hit.Score >= req.ScoreThreshold {
 				kept = append(kept, hit)
 			}
 		}

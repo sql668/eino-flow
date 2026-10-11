@@ -77,8 +77,22 @@ type chunkConfigResponse struct {
 	MinRunes     int                   `json:"minRunes"`
 	KeepNoise    bool                  `json:"keepNoise"`
 	Cleaning     []cleaningRuleRequest `json:"cleaning"`
+	// Keywords 是关键词抽取配置；不传（老前端）时后端按默认值处理。
+	Keywords *keywordConfigPayload `json:"keywords,omitempty"`
 	// Version 是配置指纹，入库后写进分段；前端展示它便于识别「这批片段是哪套参数切的」。
 	Version string `json:"version,omitempty"`
+}
+
+type keywordConfigPayload struct {
+	Enabled  bool `json:"enabled"`
+	MaxCount int  `json:"maxCount"`
+}
+
+func (p *keywordConfigPayload) toModel() *model.KeywordConfig {
+	if p == nil {
+		return nil
+	}
+	return &model.KeywordConfig{Enabled: p.Enabled, MaxCount: p.MaxCount}
 }
 
 type cleaningRuleRequest struct {
@@ -99,8 +113,16 @@ func newChunkConfigResponse(config model.ChunkConfig) chunkConfigResponse {
 		MinRunes:     config.MinRunes,
 		KeepNoise:    config.KeepNoise,
 		Cleaning:     rules,
+		Keywords:     newKeywordConfigResponse(config.Keywords),
 		Version:      config.Version(),
 	}
+}
+
+func newKeywordConfigResponse(config *model.KeywordConfig) *keywordConfigPayload {
+	if config == nil {
+		return nil
+	}
+	return &keywordConfigPayload{Enabled: config.Enabled, MaxCount: config.MaxCount}
 }
 
 func (r chunkConfigResponse) toModel() model.ChunkConfig {
@@ -116,6 +138,7 @@ func (r chunkConfigResponse) toModel() model.ChunkConfig {
 		MinRunes:     r.MinRunes,
 		KeepNoise:    r.KeepNoise,
 		Cleaning:     rules,
+		Keywords:     r.Keywords.toModel(),
 	}
 }
 
@@ -391,6 +414,10 @@ func (h *chunkWorkbenchHandler) reparse(ctx context.Context, c *app.RequestConte
 // ---------- 检索配置 ----------
 
 type retrievalConfigResponse struct {
+	// SearchMode 是检索方式（vector / fulltext / hybrid），
+	// 响应里带上它，前端才能把设置页回显成用户上次保存的样子。
+	SearchMode     string  `json:"searchMode"`
+	HybridRank     string  `json:"hybridRank"`
 	TopK           int     `json:"topK"`
 	CandidateTopK  int     `json:"candidateTopK"`
 	ScoreThreshold float32 `json:"scoreThreshold"`
@@ -401,6 +428,8 @@ type retrievalConfigResponse struct {
 
 func newRetrievalConfigResponse(config model.RetrievalConfig) retrievalConfigResponse {
 	return retrievalConfigResponse{
+		SearchMode:     string(config.SearchMode),
+		HybridRank:     string(config.HybridRank),
 		TopK:           config.TopK,
 		CandidateTopK:  config.CandidateTopK,
 		ScoreThreshold: config.ScoreThreshold,
@@ -434,6 +463,8 @@ func (h *chunkWorkbenchHandler) saveRetrievalConfig(ctx context.Context, c *app.
 		return
 	}
 	saved, err := h.documents.SaveRetrievalConfig(ctx, datasetID, model.RetrievalConfig{
+		SearchMode:     model.SearchMode(req.SearchMode),
+		HybridRank:     model.HybridRank(req.HybridRank),
 		TopK:           req.TopK,
 		CandidateTopK:  req.CandidateTopK,
 		ScoreThreshold: req.ScoreThreshold,

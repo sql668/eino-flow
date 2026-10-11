@@ -262,8 +262,10 @@ func (r chatRetriever) Retrieve(ctx context.Context, scope chat.Scope, query str
 			TitlePath:    hit.TitlePath,
 			Kind:         hit.Kind,
 			Content:      content,
-			Score:        hit.VectorScore,
-			RerankScore:  hit.RerankScore,
+			// 引用上下文里只带排序分：它是决定「第 N 条引用」的那个数，
+			// 两路原始分属于检索调试信息（检索留痕页展示），不往引用里塞。
+			Score:       hit.Score,
+			RerankScore: hit.RerankScore,
 		})
 	}
 	return contexts, nil

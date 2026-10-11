@@ -17,6 +17,7 @@ import (
 	enginemodel "einoflow-backend/internal/engine/model"
 	modelresolver "einoflow-backend/internal/engine/model/resolver"
 	"einoflow-backend/internal/engine/rag"
+	"einoflow-backend/internal/engine/rag/keyword"
 	"einoflow-backend/internal/engine/rag/loader"
 	"einoflow-backend/internal/engine/rag/loader/mineru"
 	"einoflow-backend/internal/engine/rag/loader/plaintext"
@@ -205,6 +206,9 @@ func main() {
 		Resolver:  resolver,
 		Models:    modelResolver,
 		Vectors:   vectorStore,
+		// 分词在本地做（Milvus 2.5.8 不提供分析器 RPC，见 keyword.LocalTokenizer 的说明），
+		// 不额外引入分词依赖。
+		Keywords: keyword.NewTFIDF(keyword.NewLocalTokenizer()),
 	})
 
 	// 检索兜底参数：知识库没配过检索设置时用它（配过则以知识库为准）。
@@ -264,17 +268,22 @@ func main() {
 		server.WithHostPorts(cfg.Server.Addr()),
 		// 收到退出信号后等待在途请求处理完再关闭，避免流式响应被硬切断。
 		server.WithExitWaitTime(10*time.Second),
+		// 请求体上限：真正能在「读完之前」就把超大上传拦下来的是这一层
+		// （handler 里按文件大小判断时，multipart 已经解析完了）。
+		// 留一点余量给表单边界与其它字段。
+		server.WithMaxRequestBodySize(int(cfg.Upload.MaxBytes())+1024*1024),
 	)
 
 	handler.Register(h, handler.Deps{
-		Health:        healthService,
-		Apps:          appService,
-		Datasets:      datasetService,
-		Conversations: conversationService,
-		Documents:     documentService,
-		Searches:      retrievalService,
-		ModelConfig:   modelConfigService,
-		Chats:         chatService,
+		Health:         healthService,
+		Apps:           appService,
+		Datasets:       datasetService,
+		Conversations:  conversationService,
+		Documents:      documentService,
+		Searches:       retrievalService,
+		ModelConfig:    modelConfigService,
+		Chats:          chatService,
+		MaxUploadBytes: cfg.Upload.MaxBytes(),
 	})
 
 	log.Printf("EinoFlow 后端启动中: env=%s addr=%s", cfg.App.Env, cfg.Server.Addr())

@@ -79,6 +79,48 @@ type ChunkConfig struct {
 	KeepNoise bool `json:"keepNoise"`
 	// Cleaning 是启用的清洗规则列表；默认全部不启用。
 	Cleaning []CleaningRuleConfig `json:"cleaning"`
+	// Keywords 是关键词抽取配置。
+	//
+	// 用指针是为了区分「没配过」和「显式关掉」：字段是后加的，
+	// 用值类型的话老配置反序列化出来是「关」，会让存量知识库静默停止生成关键词。
+	Keywords *KeywordConfig `json:"keywords,omitempty"`
+}
+
+// 关键词抽取的取值范围。
+const (
+	// DefaultKeywordMaxCount 是单段关键词数量的默认上限。
+	// 5 个足够覆盖一段的主旨，再多在界面上展示不下、对检索的边际收益也很低。
+	DefaultKeywordMaxCount = 5
+	// MaxKeywordMaxCount 是单段关键词数量上限。
+	MaxKeywordMaxCount = 10
+)
+
+// KeywordConfig 是入库时自动抽取关键词的配置。
+//
+// 关键词有两个用途：界面上展示（可人工修改），以及作为 BM25 全文检索的输入文本之一。
+// 因此「关掉关键词」不只是少了一列展示，也会让全文检索失去这部分权重。
+type KeywordConfig struct {
+	// Enabled 是否在入库时自动抽取关键词。
+	Enabled bool `json:"enabled"`
+	// MaxCount 是单段关键词数量上限。
+	MaxCount int `json:"maxCount"`
+}
+
+// Normalize 收敛关键词配置的边界。
+func (c KeywordConfig) Normalize() KeywordConfig {
+	out := c
+	if out.MaxCount <= 0 {
+		out.MaxCount = DefaultKeywordMaxCount
+	}
+	if out.MaxCount > MaxKeywordMaxCount {
+		out.MaxCount = MaxKeywordMaxCount
+	}
+	return out
+}
+
+// KeywordConfigDefault 返回关键词抽取的默认配置（开启，最多 5 个）。
+func KeywordConfigDefault() KeywordConfig {
+	return KeywordConfig{Enabled: true, MaxCount: DefaultKeywordMaxCount}
 }
 
 // CleaningRuleConfig 是一条清洗规则的配置。
@@ -125,6 +167,12 @@ func (c ChunkConfig) Normalize() ChunkConfig {
 		out.MinRunes = out.MaxRunes / 4
 	}
 	out.Cleaning = normalizeCleaning(out.Cleaning)
+	// 关键词配置缺省即默认开启：老配置（没有这个字段）与新建文档都走同一套默认值。
+	keywords := KeywordConfigDefault()
+	if out.Keywords != nil {
+		keywords = out.Keywords.Normalize()
+	}
+	out.Keywords = &keywords
 	return out
 }
 
@@ -161,6 +209,7 @@ func (c ChunkConfig) EnabledCleaningKeys() []string {
 // 用途：片段落库时记录「是哪套配置切的」，换配置重切后能分辨新旧；
 // 指纹只覆盖会改变切分结果的字段（模式/标识符/长度/重叠/清洗），
 // 页眉页脚开关也算——它直接影响内容。
+// 关键词配置**不在**指纹里：它不改变切分结果，只是给同一批片段附加的标注。
 func (c ChunkConfig) Version() string {
 	parts := []string{
 		string(c.Mode),
@@ -186,6 +235,8 @@ func DefaultChunkConfig() ChunkConfig {
 		KeepNoise: false,
 	}
 	cfg.OverlapRunes = cfg.MaxRunes * DefaultOverlapPercent / 100
+	keywords := KeywordConfigDefault()
+	cfg.Keywords = &keywords
 	return cfg
 }
 
@@ -194,6 +245,14 @@ func DefaultChunkConfig() ChunkConfig {
 // 放在知识库而不是应用上：检索范围与质量参数跟「这批文档」强相关
 // （手册类要小 TopK 高阈值，聊天记录类相反），换应用不该改检索策略。
 type RetrievalConfig struct {
+	// SearchMode 是检索方式：vector 向量 / fulltext 全文 / hybrid 混合。
+	//
+	// 空值按向量处理：字段是后加的，老配置里没有它，
+	// 而「老配置 = 一直用向量检索」才是它们的真实语义，不能当成 hybrid 处理。
+	SearchMode SearchMode `json:"searchMode"`
+	// HybridRank 是混合检索两路结果的融合方式：weighted 加权 / rrf 倒数排名融合。
+	// 仅在 SearchMode=hybrid 时有意义。
+	HybridRank HybridRank `json:"hybridRank"`
 	// TopK 是最终返回条数。
 	TopK int `json:"topK"`
 	// CandidateTopK 是重排前的召回条数。
@@ -205,8 +264,8 @@ type RetrievalConfig struct {
 	ScoreThreshold float32 `json:"scoreThreshold"`
 	// Rerank 表示是否启用重排（未配置重排模型时会被忽略）。
 	Rerank bool `json:"rerank"`
-	// VectorWeight 是语义（向量）权重，KeywordWeight 是关键词权重，两者和为 1。
-	// 关键词一侧要等稀疏向量落地后才真正生效，现在先落库占位（见台账技术债）。
+	// VectorWeight 是语义（向量）权重，KeywordWeight 是关键词（全文）权重。
+	// 仅在 SearchMode=hybrid 且 HybridRank=weighted 时生效。
 	VectorWeight  float32 `json:"vectorWeight"`
 	KeywordWeight float32 `json:"keywordWeight"`
 }
@@ -214,6 +273,19 @@ type RetrievalConfig struct {
 // Normalize 补齐默认值并收敛边界。
 func (c RetrievalConfig) Normalize(defaultTopK, defaultCandidateTopK int) RetrievalConfig {
 	out := c
+	if out.SearchMode == "" {
+		out.SearchMode = SearchModeVector
+	}
+	if !out.SearchMode.IsValid() {
+		out.SearchMode = SearchModeVector
+	}
+	// 融合方式只在混合检索下有意义，其它模式统一收敛成加权，
+	// 避免「切回向量检索后还留着一个 rrf」这种自相矛盾的组合被存进库。
+	if out.SearchMode != SearchModeHybrid {
+		out.HybridRank = ""
+	} else if out.HybridRank == "" || !out.HybridRank.IsValid() {
+		out.HybridRank = HybridRankWeighted
+	}
 	if out.TopK <= 0 {
 		out.TopK = defaultTopK
 	}
@@ -238,6 +310,12 @@ func (c RetrievalConfig) Normalize(defaultTopK, defaultCandidateTopK int) Retrie
 	if out.VectorWeight <= 0 && out.KeywordWeight <= 0 {
 		// 默认偏语义：中文短查询下向量检索比关键词更稳。
 		out.VectorWeight, out.KeywordWeight = 0.7, 0.3
+	}
+	// 权重归一化：界面滑块给出的是相对比例，这里落库成和为 1 的值，
+	// 免得后续「权重和是 5」这种配置一路传到向量库。
+	if total := out.VectorWeight + out.KeywordWeight; total > 0 {
+		out.VectorWeight /= total
+		out.KeywordWeight /= total
 	}
 	return out
 }

@@ -53,6 +53,12 @@ type SegmentRepository interface {
 	CreateBatch(ctx context.Context, segments []*model.Segment) error
 	// List 按顺序分页读取分段。
 	List(ctx context.Context, filter SegmentListFilter) ([]*model.Segment, int64, error)
+	// GetByID 按主键读取单个分段，并校验它属于指定知识库。
+	// 带上 datasetID 是为了让「不属于该知识库」变成查不到，而不是靠调用方自觉比对。
+	GetByID(ctx context.Context, datasetID uint64, segmentID uint64) (*model.Segment, error)
+	// UpdateKeywords 覆盖单个分段的关键词。
+	// 只更新这一列：关键词是可人工修改的标注，不该顺带改动正文与向量。
+	UpdateKeywords(ctx context.Context, datasetID uint64, segmentID uint64, keywords []string) error
 	// DeleteByDocument 删除某文档的全部分段，返回删除条数。重新解析前先清空旧分段。
 	DeleteByDocument(ctx context.Context, documentID uint64) (int64, error)
 	// ListForRetrieval 按 chunk_id 批量读取分段，用于把向量命中还原成可读内容。

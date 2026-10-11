@@ -133,6 +133,12 @@ type Segment struct {
 	ChunkConfigVersion string
 	// UserID 是上传人标识，随分段写入向量库元数据，为按人过滤（权限）留出字段。
 	UserID string
+	// Keywords 是入库时自动抽取的关键词（界面上可人工修改）。
+	//
+	// 它不只是展示：写入向量库时会与正文拼成 BM25 的输入文本，
+	// 因此改关键词会真实影响全文/混合检索的召回。
+	// 用 JSONB 存数组：关键词随分段一起读，不需要按词反查分段。
+	Keywords []string `gorm:"serializer:json"`
 	// 以下字段用于引用溯源与上下文展示。
 	Page    int
 	Locator string

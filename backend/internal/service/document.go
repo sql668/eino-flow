@@ -280,6 +280,56 @@ func (s *DocumentService) ListSegments(ctx context.Context, in ListSegmentsInput
 	return &SegmentListResult{Items: segments, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
+// UpdateSegmentKeywordsInput 是「只改分段关键词」的入参。
+type UpdateSegmentKeywordsInput struct {
+	DocumentID uint64
+	SegmentID  uint64
+	// Keywords 是覆盖后的完整关键词列表（不是增量）。
+	Keywords []string
+}
+
+// UpdateSegmentKeywords 覆盖单个分段的关键词，并同步到检索索引。
+//
+// 同步这一步不能省：关键词会进 BM25 的输入文本，只改业务库的话，
+// 界面显示的关键词与实际参与检索的内容就不一致，是最难排查的那类问题。
+func (s *DocumentService) UpdateSegmentKeywords(
+	ctx context.Context, in UpdateSegmentKeywordsInput,
+) (*model.Segment, error) {
+	if in.DocumentID == 0 || in.SegmentID == 0 {
+		return nil, fmt.Errorf("%w: 文档与分段 ID 不能为空", ErrInvalidInput)
+	}
+	doc, err := s.documents.GetByID(ctx, in.DocumentID)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	if count := countKeywords(in.Keywords); count > model.MaxKeywordMaxCount {
+		return nil, fmt.Errorf("%w: 关键词最多 %d 个，当前 %d 个",
+			ErrInvalidInput, model.MaxKeywordMaxCount, count)
+	}
+
+	segment, err := s.pipeline.UpdateSegmentKeywords(ctx, doc.DatasetID, in.SegmentID, in.Keywords)
+	if err != nil {
+		return segment, translateError(err)
+	}
+	// 只允许改本档下的分段：分段表用 dataset_id 收敛了范围，
+	// 但「这条分段是不是这篇文档的」还要再对一次，避免跨文档改数据。
+	if segment.DocumentID != in.DocumentID {
+		return nil, fmt.Errorf("%w: 分段 %d 不属于文档 %d", ErrInvalidInput, in.SegmentID, in.DocumentID)
+	}
+	return segment, nil
+}
+
+// countKeywords 统计去掉空白后剩余的关键词个数。
+func countKeywords(keywords []string) int {
+	count := 0
+	for _, item := range keywords {
+		if strings.TrimSpace(item) != "" {
+			count++
+		}
+	}
+	return count
+}
+
 // Delete 软删除文档。
 //
 // 分段是派生数据，直接删除（重新解析可重建）；原始文件保留在对象存储里，

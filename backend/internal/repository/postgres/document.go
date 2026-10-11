@@ -199,6 +199,47 @@ func (r *SegmentRepository) List(ctx context.Context, filter repository.SegmentL
 	return segments, total, nil
 }
 
+// GetByID 读取单个分段，并限制在指定知识库内。
+func (r *SegmentRepository) GetByID(
+	ctx context.Context, datasetID uint64, segmentID uint64,
+) (*model.Segment, error) {
+	var segment model.Segment
+	err := r.client.DB(ctx).
+		Where("id = ? AND dataset_id = ?", segmentID, datasetID).
+		First(&segment).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, repository.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("读取分段失败: %w", err)
+	}
+	return &segment, nil
+}
+
+// UpdateKeywords 覆盖单个分段的关键词。
+//
+// 用 Select 显式限定更新列：GORM 的 Updates(struct) 会忽略零值字段，
+// 关键词是空数组时会被整列跳过，表现为「清空关键词无效」。
+func (r *SegmentRepository) UpdateKeywords(
+	ctx context.Context, datasetID uint64, segmentID uint64, keywords []string,
+) error {
+	if keywords == nil {
+		keywords = []string{}
+	}
+	result := r.client.DB(ctx).
+		Model(&model.Segment{}).
+		Where("id = ? AND dataset_id = ?", segmentID, datasetID).
+		Select("keywords").
+		Updates(&model.Segment{Keywords: keywords})
+	if result.Error != nil {
+		return fmt.Errorf("更新分段关键词失败: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
 // DeleteByDocument 删除某文档的全部分段。
 func (r *SegmentRepository) DeleteByDocument(ctx context.Context, documentID uint64) (int64, error) {
 	result := r.client.DB(ctx).Where("document_id = ?", documentID).Delete(&model.Segment{})

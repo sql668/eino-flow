@@ -250,11 +250,33 @@ func (s *DocumentService) SaveRetrievalConfig(
 	}
 
 	normalized := config.Normalize(s.retrievalDefaults.TopK, s.retrievalDefaults.CandidateTopK)
+	if err := validateRetrievalConfig(config); err != nil {
+		return model.RetrievalConfig{}, err
+	}
 	dataset.RetrievalConfig = &normalized
 	if err := s.datasets.Update(ctx, dataset); err != nil {
 		return model.RetrievalConfig{}, translateError(err)
 	}
 	return normalized, nil
+}
+
+// validateRetrievalConfig 校验检索配置。
+//
+// 枚举值显式报错而不是交给 Normalize 收敛：Normalize 的兜底是「悄悄用向量检索」，
+// 使用者选了全文检索却拿到向量结果，会以为全文检索没效果，排查方向就全错了。
+func validateRetrievalConfig(config model.RetrievalConfig) error {
+	if config.SearchMode != "" && !config.SearchMode.IsValid() {
+		return fmt.Errorf("%w: 不支持的检索方式 %q（可选：vector / fulltext / hybrid）",
+			ErrInvalidInput, config.SearchMode)
+	}
+	if config.HybridRank != "" && !config.HybridRank.IsValid() {
+		return fmt.Errorf("%w: 不支持的融合方式 %q（可选：weighted / rrf）",
+			ErrInvalidInput, config.HybridRank)
+	}
+	if config.VectorWeight < 0 || config.KeywordWeight < 0 {
+		return fmt.Errorf("%w: 融合权重不能为负数", ErrInvalidInput)
+	}
+	return nil
 }
 
 // validateChunkConfig 校验分段配置。
@@ -316,6 +338,7 @@ func retrievalConfigOrDefault(config *model.RetrievalConfig, defaults RetrievalD
 		return model.RetrievalConfig{
 			TopK:          defaults.TopK,
 			CandidateTopK: defaults.CandidateTopK,
+			SearchMode:    model.SearchModeVector,
 			Rerank:        true,
 			VectorWeight:  0.7,
 			KeywordWeight: 0.3,
@@ -326,7 +349,8 @@ func retrievalConfigOrDefault(config *model.RetrievalConfig, defaults RetrievalD
 
 // isZeroRetrievalConfig 判断配置是否为空（从没保存过）。
 func isZeroRetrievalConfig(config model.RetrievalConfig) bool {
-	return config.TopK == 0 && config.CandidateTopK == 0 && config.ScoreThreshold == 0 &&
+	return config.SearchMode == "" && config.HybridRank == "" &&
+		config.TopK == 0 && config.CandidateTopK == 0 && config.ScoreThreshold == 0 &&
 		!config.Rerank && config.VectorWeight == 0 && config.KeywordWeight == 0
 }
 

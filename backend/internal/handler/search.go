@@ -42,15 +42,19 @@ type searchHitResponse struct {
 	DocumentID   uint64 `json:"documentId"`
 	DocumentName string `json:"documentName"`
 	Rank         int    `json:"rank"`
-	// VectorScore 与 RerankScore 都返回：使用者才能看出重排把哪条提了上来。
-	VectorScore float32  `json:"vectorScore"`
-	RerankScore *float32 `json:"rerankScore,omitempty"`
-	Content     string   `json:"content"`
-	ChunkIndex  int      `json:"chunkIndex"`
-	Page        int      `json:"page"`
-	Locator     string   `json:"locator"`
-	Kind        string   `json:"kind"`
-	TitlePath   []string `json:"titlePath"`
+	// Score 是决定本次排名的分数（单路检索是该路分数，混合检索是融合分）。
+	Score float32 `json:"score"`
+	// VectorScore / FullTextScore / RerankScore 都返回：
+	// 使用者才能看出「这条是靠语义还是关键词命中」「重排把哪条提了上来」。
+	VectorScore   *float32 `json:"vectorScore,omitempty"`
+	FullTextScore *float32 `json:"fullTextScore,omitempty"`
+	RerankScore   *float32 `json:"rerankScore,omitempty"`
+	Content       string   `json:"content"`
+	ChunkIndex    int      `json:"chunkIndex"`
+	Page          int      `json:"page"`
+	Locator       string   `json:"locator"`
+	Kind          string   `json:"kind"`
+	TitlePath     []string `json:"titlePath"`
 }
 
 type searchResponse struct {
@@ -59,6 +63,9 @@ type searchResponse struct {
 	Query          string `json:"query"`
 	TopK           int    `json:"topK"`
 	EmbeddingModel string `json:"embeddingModel"`
+	// Mode 是本次实际使用的检索方式（vector / fulltext / hybrid）。
+	// 与 embeddingModel 同理：模式变了结果必然不同，界面上要能看出来。
+	Mode string `json:"mode"`
 	// RerankModel 为空表示本次未做重排，原因见 rerankSkipped。
 	RerankModel   string `json:"rerankModel"`
 	RerankSkipped string `json:"rerankSkipped,omitempty"`
@@ -99,18 +106,20 @@ func (h *searchHandler) search(ctx context.Context, c *app.RequestContext) {
 	hits := make([]searchHitResponse, 0, len(result.Hits))
 	for _, hit := range result.Hits {
 		hits = append(hits, searchHitResponse{
-			SegmentID:    hit.SegmentID,
-			DocumentID:   hit.DocumentID,
-			DocumentName: hit.DocumentName,
-			Rank:         hit.Rank,
-			VectorScore:  hit.VectorScore,
-			RerankScore:  hit.RerankScore,
-			Content:      hit.Content,
-			ChunkIndex:   hit.ChunkIndex,
-			Page:         hit.Page,
-			Locator:      hit.Locator,
-			Kind:         hit.Kind,
-			TitlePath:    hit.TitlePath,
+			SegmentID:     hit.SegmentID,
+			DocumentID:    hit.DocumentID,
+			DocumentName:  hit.DocumentName,
+			Rank:          hit.Rank,
+			Score:         hit.Score,
+			VectorScore:   hit.VectorScore,
+			FullTextScore: hit.FullTextScore,
+			RerankScore:   hit.RerankScore,
+			Content:       hit.Content,
+			ChunkIndex:    hit.ChunkIndex,
+			Page:          hit.Page,
+			Locator:       hit.Locator,
+			Kind:          hit.Kind,
+			TitlePath:     hit.TitlePath,
 		})
 	}
 
@@ -119,6 +128,7 @@ func (h *searchHandler) search(ctx context.Context, c *app.RequestContext) {
 		Query:          result.Query,
 		TopK:           result.TopK,
 		EmbeddingModel: result.EmbeddingModel,
+		Mode:           string(result.Mode),
 		RerankModel:    result.RerankModel,
 		RerankSkipped:  result.RerankSkipped,
 		Recalled:       result.Recalled,

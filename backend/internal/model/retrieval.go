@@ -19,14 +19,63 @@ const (
 )
 
 // RetrievalStage 表示命中发生在检索的哪个阶段。
-// 现在只有向量召回；rerank 落地后同一片段会再产生一条 rerank 阶段的命中记录，
+// 召回阶段按检索方式再细分（向量 / 全文 / 混合），rerank 落地后同一片段会再产生一条 rerank 阶段的命中记录，
 // 这样「召回 20 条 → 重排后留 5 条」的完整过程才可回溯。
 type RetrievalStage string
 
 const (
-	RetrievalStageVector RetrievalStage = "vector" // 向量召回
-	RetrievalStageRerank RetrievalStage = "rerank" // 重排（未落地）
+	RetrievalStageVector   RetrievalStage = "vector"   // 向量召回
+	RetrievalStageFullText RetrievalStage = "fulltext" // 全文（BM25）召回
+	RetrievalStageHybrid   RetrievalStage = "hybrid"   // 混合召回（两路融合）
+	RetrievalStageRerank   RetrievalStage = "rerank"   // 重排
 )
+
+// SearchMode 是检索方式。
+//
+// 定义在 model 而不是 repository：它同时出现在知识库配置、接口请求
+// 与向量库调用上，属于领域词汇。写错一个字符串的表现是「检索悄悄退化」而不是报错，
+// 所以三种取值集中在这里，并显式校验。
+type SearchMode string
+
+const (
+	// SearchModeVector 只做向量（dense）召回，语义相似优先。
+	SearchModeVector SearchMode = "vector"
+	// SearchModeFullText 只做全文（BM25 稀疏）召回，关键词命中优先。
+	SearchModeFullText SearchMode = "fulltext"
+	// SearchModeHybrid 两路并行召回后融合，语义与关键词兼顾。
+	SearchModeHybrid SearchMode = "hybrid"
+)
+
+// IsValid 校验检索方式取值。
+func (m SearchMode) IsValid() bool {
+	switch m {
+	case SearchModeVector, SearchModeFullText, SearchModeHybrid:
+		return true
+	default:
+		return false
+	}
+}
+
+// HybridRank 是混合检索两路结果的融合方式。
+type HybridRank string
+
+const (
+	// HybridRankWeighted 按权重加权融合，权重可调、结果可解释。
+	HybridRankWeighted HybridRank = "weighted"
+	// HybridRankRRF 用倒数排名融合（RRF）：只看名次不看分数，
+	// 好处是不用调权重，也不受两路分数量纲不同的影响。
+	HybridRankRRF HybridRank = "rrf"
+)
+
+// IsValid 校验融合方式取值。
+func (r HybridRank) IsValid() bool {
+	switch r {
+	case HybridRankWeighted, HybridRankRRF:
+		return true
+	default:
+		return false
+	}
+}
 
 // RetrievalRun 是一次检索请求的记录。
 //
@@ -41,6 +90,10 @@ type RetrievalRun struct {
 	// EmbeddingModel 记录本次检索用的向量模型：换模型后向量空间变了，
 	// 不记录就无法判断「某天的检索结果为什么变差」。
 	EmbeddingModel string
+	// SearchMode 是本次使用的检索方式（vector / fulltext / hybrid）。
+	// 它与 EmbeddingModel 同理：同一个问题换了检索方式，结果必然不同，
+	// 不留痕就没法解释「昨天搜得到、今天搜不到」。
+	SearchMode string
 	// CandidateCount 是重排前的召回条数；未启用重排时等于命中数。
 	// 记录它是为了还原「召回 20 条 → 重排后留 5 条」这个两阶段过程。
 	CandidateCount int
@@ -66,9 +119,14 @@ type RetrievalHit struct {
 	DocumentID uint64
 	// Rank 是该片段在本阶段的排名，从 1 开始。
 	Rank int
-	// Score 是向量相似度（余弦，越大越相似）。
+	// Score 是本阶段的排序分（单路是那一路的分数，混合是融合分，重排是重排分）。
 	Score float32
-	// RerankScore 是重排分数，rerank 落地前为空。
+	// VectorScore / FullTextScore 是两路各自的分数；该路未参与本次检索时为空。
+	// 它们与 Score 的区别是「原始分」与「排序分」：混合检索下两者不同，
+	// 分开记录才能回答「这条是靠语义还是靠关键词进来的」。
+	VectorScore   *float32
+	FullTextScore *float32
+	// RerankScore 是重排分数，未做重排时为空。
 	RerankScore *float32
 	Stage       RetrievalStage
 	CreatedAt   time.Time
