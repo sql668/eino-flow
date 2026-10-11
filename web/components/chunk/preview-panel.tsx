@@ -3,26 +3,51 @@
 import { useState } from "react";
 
 import { Reading, ReadingRow } from "@/components/ui/reading";
+import { Button } from "@/components/ui/button";
 import { useChunkWorkbenchStore } from "@/stores/chunk-workbench-store";
 import type { PreviewChunk } from "@/types/api";
 
 // 分段工作台右侧：预览面板。
 //
 // 这里承担三件事（都是 Dify 那版缺的）：
-//   1. 改配置自动重算，不用点按钮；
+//   1. 预览结果可见且**可控**：进入页面自动算一次，之后改参数要点「预览」重算
+//      （大文件上自动重算纯属浪费），并明确标出「结果已过期」；
 //   2. 清洗「删了什么」可见：每条规则给命中数、删除字数与被删样本，片段可切换原文/清洗后；
 //   3. 健康度提示：哪些片段贴着上限被切开、哪些过短、重叠带来多少重复内容。
 
 export function ChunkPreviewPanel() {
   const preview = useChunkWorkbenchStore((state) => state.preview);
   const previewing = useChunkWorkbenchStore((state) => state.previewing);
+  const previewDirty = useChunkWorkbenchStore((state) => state.previewDirty);
   const blockedReason = useChunkWorkbenchStore((state) => state.blockedReason);
+  const refreshPreview = useChunkWorkbenchStore((state) => state.refreshPreview);
+
+  // 预览是手动触发的：无论有没有结果，这个按钮都要在，
+  // 否则「改了配置却没有可点的入口」会让人以为功能坏了。
+  const toolbar = (
+    <div className="flex flex-wrap items-center gap-3">
+      {previewDirty && !previewing ? (
+        <span className="rounded-sm border border-warn/30 bg-warn-soft px-2 py-1 text-[11px] text-warn">
+          配置已改动，下面的结果还是上一次的
+        </span>
+      ) : null}
+      {blockedReason ? (
+        <span className="text-[11px] text-ink-muted">{blockedReason}</span>
+      ) : null}
+      <Button variant="primary" busy={previewing} onClick={() => void refreshPreview()}>
+        预览
+      </Button>
+    </div>
+  );
 
   if (!preview) {
     return (
-      <p className="text-sm text-ink-muted">
-        {previewing ? "正在按当前配置预览…" : blockedReason || "加载预览…"}
-      </p>
+      <div className="flex flex-col items-start gap-3">
+        {toolbar}
+        <p className="text-sm text-ink-muted">
+          {previewing ? "正在按当前配置预览…" : "还没有预览结果"}
+        </p>
+      </div>
     );
   }
 
@@ -36,7 +61,7 @@ export function ChunkPreviewPanel() {
           {preview.meta.parser}/{preview.meta.parseMode}
         </span>
         <span className="reading">指纹 {preview.configVersion}</span>
-        {previewing ? <span className="text-pri">正在重算…</span> : null}
+        <div className="ml-auto">{toolbar}</div>
       </div>
 
       {/* 读数条：像仪表一样把关键数字并排摆出来，数字用等宽 + 单位标签 */}

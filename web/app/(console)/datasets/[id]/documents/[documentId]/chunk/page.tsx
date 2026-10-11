@@ -23,6 +23,7 @@ export default function ChunkWorkbenchPage() {
   const load = useChunkWorkbenchStore((state) => state.load);
   const config = useChunkWorkbenchStore((state) => state.config);
   const preview = useChunkWorkbenchStore((state) => state.preview);
+  const previewDirty = useChunkWorkbenchStore((state) => state.previewDirty);
   const error = useChunkWorkbenchStore((state) => state.error);
   const notice = useChunkWorkbenchStore((state) => state.notice);
   const ingesting = useChunkWorkbenchStore((state) => state.ingesting);
@@ -55,7 +56,9 @@ export default function ChunkWorkbenchPage() {
           <span className="text-ink-muted">分段与清洗</span>
         </nav>
         <h1 className="text-base font-semibold tracking-tight text-ink">分段与清洗</h1>
-        <span className="text-xs text-ink-soft">左侧调参数，右侧实时看结果</span>
+        <span className="text-xs text-ink-soft">
+          左侧调参数，改完点右侧「预览」看结果（进入页面会自动预览一次）
+        </span>
       </header>
 
       {error || notice ? (
@@ -108,9 +111,17 @@ export default function ChunkWorkbenchPage() {
             保存并处理
           </Button>
         </div>
-        <span className="reading w-full text-[11px] text-ink-soft">
-          配置指纹 {config.version ?? "—"} · 入库后写进每个片段，便于分辨「这批片段是哪套参数切的」
-        </span>
+        {/* 入库是不可逆的（要重新切分并重建向量），因此「看到的预览不是当前配置」这件事
+            在提交前必须再说一次——右侧面板的提示可能已经被滚出视野。 */}
+        {previewDirty ? (
+          <span className="w-full text-[11px] leading-5 text-warn">
+            配置已改动但还没预览：先点右侧「预览」确认切分结果，再入库
+          </span>
+        ) : (
+          <span className="reading w-full text-[11px] text-ink-soft">
+            配置指纹 {config.version ?? "—"} · 入库后写进每个片段，便于分辨「这批片段是哪套参数切的」
+          </span>
+        )}
       </footer>
     </div>
   );

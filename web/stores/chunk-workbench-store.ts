@@ -16,15 +16,12 @@ import type {
 // 放 Zustand 而不是页面内 useState：左侧配置面板与右侧预览面板是并列组件，
 // 共享同一份配置与预览结果，用 props 传递会变成层层透传。
 //
-// 关键交互：**改配置自动重算预览**（300ms 防抖）。
-// Dify 那套要点按钮才出预览的做法，调参时等于闭眼调；这里把预览当成配置的函数。
-
-// previewDebounceMS 是配置变更到发起预览之间的等待时间。
-// 太短会在拖动滑块时打出一串请求，太长会让人觉得「没反应」。
-const previewDebounceMS = 300;
-
-// previewTimer 是模块级定时器：放在 store 外避免它进入状态树（它不需要被订阅）。
-let previewTimer: ReturnType<typeof setTimeout> | null = null;
+// 关键交互（2026-10-11 调整）：
+//   * 进入工作台会自动预览一次（不然右侧是空的，不知道从哪开始）；
+//   * 之后**改配置不自动重算**，要点「预览」——大文件上自动预览纯属浪费，
+//     而且并发请求不会取消，会一起排队；
+//   * 配置改过而预览没跟上时，界面必须显示「结果已过期」，
+//     否则使用者会照着旧结果判断新参数的效果。
 
 interface ChunkWorkbenchState {
   datasetId: number;
@@ -35,6 +32,13 @@ interface ChunkWorkbenchState {
   loading: boolean;
   /** 预览请求进行中 */
   previewing: boolean;
+  /**
+   * 配置改过、但预览还没跟上。
+   *
+   * 预览是**手动触发**的（大文件上自动预览太浪费），因此必须明确告诉使用者
+   * 「右边看到的结果不是当前配置的」——否则调参时会照着过期结果下判断。
+   */
+  previewDirty: boolean;
   /**
    * 预览被跳过的原因（当前配置还不完整，例如分隔符模式没填分隔符）。
    *
@@ -56,6 +60,7 @@ interface ChunkWorkbenchState {
   resetToDatasetDefault: () => Promise<void>;
   applyPreset: (preset: string) => void;
   setSaveAsDefault: (value: boolean) => void;
+  /** 按当前配置重算预览（手动触发）。 */
   refreshPreview: () => Promise<void>;
   ingest: () => Promise<boolean>;
   clearMessages: () => void;
@@ -79,16 +84,13 @@ function describeError(error: unknown): string {
 }
 
 export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => {
-  // schedulePreview 在配置变化后延迟触发一次预览。
-  const schedulePreview = () => {
-    if (previewTimer) {
-      clearTimeout(previewTimer);
-    }
-    previewTimer = setTimeout(() => {
-      previewTimer = null;
-      void get().refreshPreview();
-    }, previewDebounceMS);
-  };
+  // markDirty 在配置变化后把预览标记为「已过期」。
+  //
+  // 刻意**不**自动重算：大文档上「还没调完就触发一次预览」纯属浪费
+  // （实测 200 页文档每次预览 20~50ms 的解析与切分，改五个参数就是五次），
+  // 而且并发的预览请求不会被取消，会一起排队。改为使用者点「预览」时才算，
+  // 代价是要把「结果已过期」明确显示出来（见 previewDirty）。
+  const markDirty = () => set({ previewDirty: true });
 
   return {
     datasetId: 0,
@@ -98,6 +100,7 @@ export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => 
     preview: null,
     loading: false,
     previewing: false,
+    previewDirty: false,
     blockedReason: "",
     ingesting: false,
     saveAsDefault: false,
@@ -128,7 +131,7 @@ export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => 
         }
         return { config };
       });
-      schedulePreview();
+      markDirty();
     },
 
     toggleRule: (key, enabled) => {
@@ -142,7 +145,7 @@ export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => 
         }
         return { config: { ...state.config, cleaning } };
       });
-      schedulePreview();
+      markDirty();
     },
 
     setRulePattern: (key, pattern) => {
@@ -154,15 +157,16 @@ export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => 
           ),
         },
       }));
-      schedulePreview();
+      markDirty();
     },
 
     resetToDatasetDefault: async () => {
       const { datasetId } = get();
       try {
         const config = await chunkApi.getChunkConfig(datasetId);
-        set({ config, notice: "已恢复为知识库默认配置" });
-        await get().refreshPreview();
+        // 同样只标记「已过期」而不自动重算：规则统一成「只有进页面时自动预览一次」，
+        // 使用者才不会在「有的操作自动、有的不自动」之间猜。
+        set({ config, notice: "已恢复为知识库默认配置，点「预览」查看结果", previewDirty: true });
       } catch (error) {
         set({ error: describeError(error) });
       }
@@ -194,8 +198,8 @@ export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => 
         return;
       }
       set((state) => ({ config: { ...state.config, ...patch } }));
-      set({ notice: "已应用预设（清洗规则未改动）" });
-      schedulePreview();
+      set({ notice: "已应用预设（清洗规则未改动），点「预览」查看结果" });
+      markDirty();
     },
 
     setSaveAsDefault: (value) => set({ saveAsDefault: value }),
@@ -220,7 +224,8 @@ export const useChunkWorkbenchStore = create<ChunkWorkbenchState>((set, get) => 
       set({ previewing: true, error: "", blockedReason: "" });
       try {
         const preview = await chunkApi.preview(documentId, config);
-        set({ preview, previewing: false });
+        // 成功才清掉「过期」标记：失败时右侧仍是旧结果，标记必须留着。
+        set({ preview, previewing: false, previewDirty: false });
       } catch (error) {
         // 预览失败不清空上一次结果：配置改错时保留上一次可见的结果更有用。
         set({ previewing: false, error: describeError(error) });
