@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ThinkingBlock } from "@/components/chat/thinking-block";
+import { TypewriterText } from "@/components/chat/typewriter-text";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { chatApi, datasetsApi } from "@/lib/api/console";
@@ -19,6 +21,8 @@ interface ChatMessage {
   id: number;
   role: "user" | "assistant";
   content: string;
+  /** 思考过程（推理模型才有，不进正文、不落库）。 */
+  reasoning?: string;
   citations?: CitationInfo[];
   streaming?: boolean;
   latencyMs?: number;
@@ -35,7 +39,10 @@ export function ChatPanel({ app }: { app: AppInfo }) {
   const [error, setError] = useState("");
   const localIdRef = useRef(-1);
   const abortRef = useRef<AbortController | null>(null);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 是否「钉在底部」：用户往上翻看历史时不能强行把他拉回来，
+  // 但只要他在底部附近，新内容就必须跟得住（流式 + 打字机都在持续长高）。
+  const stickRef = useRef(true);
 
   const needDataset = app.mode === "rag";
 
@@ -55,10 +62,35 @@ export function ChatPanel({ app }: { app: AppInfo }) {
       .catch(() => setError("加载知识库列表失败"));
   }, [needDataset]);
 
-  // 有新内容就滚到底部：对话页不滚就看不到最新回答。
+  const scrollToBottom = useCallback(() => {
+    const element = scrollRef.current;
+    if (element) {
+      element.scrollTop = element.scrollHeight;
+    }
+  }, []);
+
+  // 打字机每揭示一帧都会回调一次：只有「钉在底部」时才跟随，
+  // 否则用户正在往上翻，页面会被一行行拽回去。
+  const handleReveal = useCallback(() => {
+    if (stickRef.current) {
+      scrollToBottom();
+    }
+  }, [scrollToBottom]);
+
+  const handleScroll = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    // 距底部 32px 以内都算「在底部」：轻微滚动不应该打断跟随。
+    stickRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 32;
+  }, []);
+
+  // 新消息（用户提问）一定要滚到底部：这是用户自己的动作，不该被「没钉住」挡住。
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
+    stickRef.current = true;
+    scrollToBottom();
+  }, [messages.length, scrollToBottom]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -96,6 +128,14 @@ export function ChatPanel({ app }: { app: AppInfo }) {
             setMessages((prev) =>
               prev.map((item) =>
                 item.id === assistantId ? { ...item, citations: payload.citations } : item,
+              ),
+            ),
+          onReasoning: (payload) =>
+            setMessages((prev) =>
+              prev.map((item) =>
+                item.id === assistantId
+                  ? { ...item, reasoning: (item.reasoning ?? "") + payload.content }
+                  : item,
               ),
             ),
           onDelta: (payload) =>
@@ -189,7 +229,11 @@ export function ChatPanel({ app }: { app: AppInfo }) {
         </p>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto rounded border border-grid bg-white px-4 py-4">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto rounded border border-grid bg-white px-4 py-4"
+      >
         {messages.length === 0 ? (
           // 空状态是「邀请使用」的位置：给出具体可做的事，而不是一句「暂无数据」。
           <div className="m-auto flex max-w-sm flex-col items-center gap-2 text-center">
@@ -203,9 +247,8 @@ export function ChatPanel({ app }: { app: AppInfo }) {
           </div>
         ) : null}
         {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+          <MessageBubble key={message.id} message={message} onReveal={handleReveal} />
         ))}
-        <div ref={bottomRef} />
       </div>
 
       <div className="flex items-end gap-3">
@@ -242,8 +285,14 @@ export function ChatPanel({ app }: { app: AppInfo }) {
   );
 }
 
-/** MessageBubble 渲染单条消息；助手消息额外展示引用来源与耗时。 */
-function MessageBubble({ message }: { message: ChatMessage }) {
+/** MessageBubble 渲染单条消息；助手消息额外展示思考过程、引用来源与耗时。 */
+function MessageBubble({
+  message,
+  onReveal,
+}: {
+  message: ChatMessage;
+  onReveal: () => void;
+}) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -256,15 +305,24 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
   return (
     <div className="flex flex-col gap-2">
+      {/* 思考过程放在回答上方：它是「先发生的事」，位置本身就表达了顺序。 */}
+      <ThinkingBlock
+        text={message.reasoning ?? ""}
+        active={message.streaming === true && message.content === ""}
+      />
       <div className="max-w-[90%] self-start rounded border border-grid bg-paper px-3.5 py-2.5 text-sm leading-6 text-ink">
         {message.content === "" && message.streaming ? (
           <span className="text-ink-soft">正在检索并组织回答…</span>
         ) : (
-          <span className="whitespace-pre-wrap">{message.content}</span>
+          // 只有本次会话新产生的回答逐字揭示（本地消息的 id 为负）：
+          // 历史消息重挂载时直接显示全文，不然每次进页面都要把旧回答重打一遍。
+          <TypewriterText
+            text={message.content}
+            streamFinished={message.streaming !== true}
+            onReveal={onReveal}
+            animate={message.id < 0}
+          />
         )}
-        {message.streaming && message.content !== "" ? (
-          <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-pri align-middle" />
-        ) : null}
       </div>
 
       {message.citations && message.citations.length > 0 ? (

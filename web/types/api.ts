@@ -340,6 +340,11 @@ export interface ChatDeltaPayload {
   content: string;
 }
 
+/** 推理模型的思考过程增量（qwen3 等会先产出一段 thinking）。 */
+export interface ChatReasoningPayload {
+  content: string;
+}
+
 export interface ChatDonePayload {
   conversationId: number;
   messageId: number;
