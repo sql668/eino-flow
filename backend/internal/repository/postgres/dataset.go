@@ -76,7 +76,11 @@ func (r *DatasetRepository) Update(ctx context.Context, dataset *model.Dataset) 
 	result := r.client.DB(ctx).
 		Model(&model.Dataset{}).
 		Where("id = ?", dataset.ID).
-		Select("name", "description", "embedding_model", "status").
+		// 显式列出可更新列：GORM 的 Updates(struct) 会跳过零值，
+		// 而空白描述、空状态都是合法值；同时新增列（分段/检索配置）必须在这里出现，
+		// 否则调用方以为存上了、实际连 SQL 都没生成（这次就踩到了）。
+		Select("name", "description", "embedding_model", "status",
+			"chunk_config", "retrieval_config").
 		Updates(dataset)
 	if result.Error != nil {
 		return fmt.Errorf("更新知识库失败: %w", result.Error)

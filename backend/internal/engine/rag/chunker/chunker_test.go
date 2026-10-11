@@ -1,11 +1,13 @@
 package chunker_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"einoflow-backend/internal/engine/rag/chunker"
 	"einoflow-backend/internal/engine/rag/loader"
+	"einoflow-backend/internal/model"
 )
 
 // block 构造一个文本块。
@@ -53,7 +55,8 @@ func TestSplit_DropsNoiseBlocks(t *testing.T) {
 		block(loader.BlockFooter, "页脚内容", 1, 2),
 		block(loader.BlockPageNumber, "1", 1, 3),
 	)
-	chunks := chunker.Split(doc, chunker.Options{MaxRunes: 100})
+	res, _ := chunker.Split(doc, chunker.Options{MaxRunes: 100})
+	chunks := res.Chunks
 	if len(chunks) != 1 {
 		t.Fatalf("片段数 = %d, 期望 1（页眉/页脚/页码应被丢弃）", len(chunks))
 	}
@@ -67,7 +70,8 @@ func TestSplit_KeepNoiseOption(t *testing.T) {
 		block(loader.BlockHeader, "页眉", 1, 0),
 		block(loader.BlockText, "正文内容。", 1, 1),
 	)
-	chunks := chunker.Split(doc, chunker.Options{KeepNoise: true, MinRunes: 1})
+	res, _ := chunker.Split(doc, chunker.Options{KeepNoise: true, MinRunes: 1})
+	chunks := res.Chunks
 	if len(chunks) != 1 {
 		t.Fatalf("片段数 = %d, 期望 1", len(chunks))
 	}
@@ -84,7 +88,8 @@ func TestSplit_TitleStartsNewChunkAndAddsBreadcrumb(t *testing.T) {
 		title("1.1 概述", 2, 1, 2),
 		block(loader.BlockText, longText, 1, 3),
 	)
-	chunks := chunker.Split(doc, chunker.Options{MaxRunes: 2000})
+	res, _ := chunker.Split(doc, chunker.Options{MaxRunes: 2000})
+	chunks := res.Chunks
 	if len(chunks) != 2 {
 		t.Fatalf("片段数 = %d, 期望 2（每个标题开启新片段）", len(chunks))
 	}
@@ -119,7 +124,8 @@ func TestSplit_TitleLevelsNeedNotBeContiguous(t *testing.T) {
 		title("另一个顶层标题", 2, 1, 4),
 		block(loader.BlockText, "另一段正文。", 1, 5),
 	)
-	chunks := chunker.Split(doc, chunker.Options{MaxRunes: 2000, MinRunes: 1})
+	res, _ := chunker.Split(doc, chunker.Options{MaxRunes: 2000, MinRunes: 1})
+	chunks := res.Chunks
 	if len(chunks) != 3 {
 		t.Fatalf("片段数 = %d, 期望 3", len(chunks))
 	}
@@ -138,7 +144,8 @@ func TestSplit_TableKeptWhole(t *testing.T) {
 		block(loader.BlockText, "表格前的说明文字，长度足够形成片段。", 1, 0),
 		table(html, 1, 1),
 	)
-	chunks := chunker.Split(doc, chunker.Options{MaxRunes: 100})
+	res, _ := chunker.Split(doc, chunker.Options{MaxRunes: 100})
+	chunks := res.Chunks
 	if len(chunks) != 2 {
 		t.Fatalf("片段数 = %d, 期望 2", len(chunks))
 	}
@@ -165,7 +172,8 @@ func TestSplit_SplitsByMaxRunes(t *testing.T) {
 		block(loader.BlockText, strings.Repeat("丙", 100), 1, 2),
 		block(loader.BlockText, strings.Repeat("丁", 100), 1, 3),
 	)
-	chunks := chunker.Split(doc, chunker.Options{MaxRunes: 250, MinRunes: 1})
+	res, _ := chunker.Split(doc, chunker.Options{MaxRunes: 250, MinRunes: 1})
+	chunks := res.Chunks
 	if len(chunks) < 2 {
 		t.Fatalf("片段数 = %d, 超过 MaxRunes 应被切开", len(chunks))
 	}
@@ -182,7 +190,8 @@ func TestSplit_MergesShortTail(t *testing.T) {
 		block(loader.BlockText, strings.Repeat("正文", 100), 1, 0),
 		block(loader.BlockText, "很短。", 1, 1),
 	)
-	chunks := chunker.Split(doc, chunker.Options{MaxRunes: 5000, MinRunes: 40})
+	res, _ := chunker.Split(doc, chunker.Options{MaxRunes: 5000, MinRunes: 40})
+	chunks := res.Chunks
 	if len(chunks) != 1 {
 		t.Fatalf("片段数 = %d, 过短的尾部应并入上一片段", len(chunks))
 	}
@@ -197,7 +206,8 @@ func TestSplit_MergesShortTail(t *testing.T) {
 func TestSplit_KeepsFirstChunkEvenIfShort(t *testing.T) {
 	// 文档首段很短时不能丢弃，否则内容会丢。
 	doc := docOf(block(loader.BlockText, "短。", 1, 0))
-	chunks := chunker.Split(doc, chunker.Options{MaxRunes: 5000, MinRunes: 40})
+	res, _ := chunker.Split(doc, chunker.Options{MaxRunes: 5000, MinRunes: 40})
+	chunks := res.Chunks
 	if len(chunks) != 1 {
 		t.Fatalf("片段数 = %d, 首个片段不应被丢弃", len(chunks))
 	}
@@ -207,7 +217,8 @@ func TestSplit_RecordsPageAndLocator(t *testing.T) {
 	doc := docOf(
 		block(loader.BlockText, "第二页的正文内容，长度足够。", 2, 5),
 	)
-	chunks := chunker.Split(doc, chunker.Options{MaxRunes: 5000, MinRunes: 1})
+	res, _ := chunker.Split(doc, chunker.Options{MaxRunes: 5000, MinRunes: 1})
+	chunks := res.Chunks
 	if len(chunks) != 1 {
 		t.Fatalf("片段数 = %d", len(chunks))
 	}
@@ -220,15 +231,87 @@ func TestSplit_RecordsPageAndLocator(t *testing.T) {
 }
 
 func TestSplit_EmptyInputs(t *testing.T) {
-	if got := chunker.Split(nil, chunker.Options{}); got != nil {
-		t.Errorf("nil 文档应返回 nil，实际 %v", got)
+	res, err := chunker.Split(nil, chunker.Options{})
+	if err != nil {
+		t.Fatalf("nil 文档不应报错: %v", err)
 	}
-	if got := chunker.Split(docOf(), chunker.Options{}); len(got) != 0 {
-		t.Errorf("空文档应返回空片段，实际 %v", got)
+	if res.Chunks != nil {
+		t.Errorf("nil 文档应返回 nil，实际 %v", res.Chunks)
 	}
+
+	res, err = chunker.Split(docOf(), chunker.Options{})
+	if err != nil {
+		t.Fatalf("空文档不应报错: %v", err)
+	}
+	if len(res.Chunks) != 0 {
+		t.Errorf("空文档应返回空片段，实际 %v", res.Chunks)
+	}
+
 	// 全是噪声块的文档不应产出片段
 	doc := docOf(block(loader.BlockHeader, "页眉", 1, 0), block(loader.BlockFooter, "页脚", 1, 1))
-	if got := chunker.Split(doc, chunker.Options{}); len(got) != 0 {
-		t.Errorf("仅含噪声时不应产出片段，实际 %v", got)
+	res, err = chunker.Split(doc, chunker.Options{})
+	if err != nil {
+		t.Fatalf("纯噪声文档不应报错: %v", err)
 	}
+	if len(res.Chunks) != 0 {
+		t.Errorf("仅含噪声时不应产出片段，实际 %v", res.Chunks)
+	}
+}
+
+// TestSplit_ModesAndOverlap 覆盖新增能力：模式分发、窗口重叠与统计。
+func TestSplit_ModesAndOverlap(t *testing.T) {
+	// 三段正文，每段约 100 字，靠长度切开（上限 120）以便观察重叠。
+	long := strings.Repeat("测", 100)
+	doc := docOf(
+		block(loader.BlockParagraphTitle, "第一章", 1, 0),
+		block(loader.BlockText, long, 1, 1),
+		block(loader.BlockText, long, 1, 2),
+	)
+
+	t.Run("窗口重叠", func(t *testing.T) {
+		result, err := chunker.Split(doc, chunker.Options{MaxRunes: 120, MinRunes: 10, OverlapRunes: 20})
+		if err != nil {
+			t.Fatalf("切片失败: %v", err)
+		}
+		if len(result.Chunks) < 2 {
+			t.Fatalf("片段数 = %d, 期望至少 2 段", len(result.Chunks))
+		}
+		if result.Chunks[1].OverlapRunes != 20 {
+			t.Errorf("第二段重叠 = %d, 期望 20", result.Chunks[1].OverlapRunes)
+		}
+		if result.Stats.OverlapRunes == 0 {
+			t.Error("统计里应记录重叠字数")
+		}
+	})
+
+	t.Run("关闭重叠", func(t *testing.T) {
+		result, err := chunker.Split(doc, chunker.Options{MaxRunes: 120, MinRunes: 10, OverlapRunes: 0})
+		if err != nil {
+			t.Fatalf("切片失败: %v", err)
+		}
+		for _, chunk := range result.Chunks {
+			if chunk.OverlapRunes != 0 {
+				t.Errorf("关闭重叠后不应有重叠，实际 %d", chunk.OverlapRunes)
+			}
+		}
+	})
+
+	t.Run("固定长度模式忽略标题", func(t *testing.T) {
+		result, err := chunker.Split(doc, chunker.Options{Mode: model.ChunkModeLength, MaxRunes: 300})
+		if err != nil {
+			t.Fatalf("切片失败: %v", err)
+		}
+		if len(result.Chunks) != 1 {
+			t.Fatalf("片段数 = %d, 期望 1 段（标题不打断）", len(result.Chunks))
+		}
+		if len(result.Chunks[0].TitlePath) != 0 {
+			t.Errorf("固定长度模式不应带标题路径，实际 %v", result.Chunks[0].TitlePath)
+		}
+	})
+
+	t.Run("父子分段明确报错", func(t *testing.T) {
+		if _, err := chunker.Split(doc, chunker.Options{Mode: model.ChunkModeParentChild}); !errors.Is(err, chunker.ErrModeNotImplemented) {
+			t.Fatalf("错误 = %v, 期望 ErrModeNotImplemented", err)
+		}
+	})
 }

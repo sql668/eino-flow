@@ -63,7 +63,11 @@ type searchResponse struct {
 	RerankModel   string `json:"rerankModel"`
 	RerankSkipped string `json:"rerankSkipped,omitempty"`
 	// Recalled 是重排前的召回条数，用于展示「召回 N 条 → 重排后留 M 条」。
-	Recalled  int                 `json:"recalled"`
+	Recalled int `json:"recalled"`
+	// Filtered 是被相似度阈值筛掉的条数，Threshold 是本次使用的阈值。
+	// 返回它们是为了解释「为什么没结果」——否则使用者会以为检索坏了。
+	Filtered  int                 `json:"filtered"`
+	Threshold float32             `json:"threshold"`
 	LatencyMS int                 `json:"latencyMs"`
 	Hits      []searchHitResponse `json:"hits"`
 }
@@ -118,6 +122,8 @@ func (h *searchHandler) search(ctx context.Context, c *app.RequestContext) {
 		RerankModel:    result.RerankModel,
 		RerankSkipped:  result.RerankSkipped,
 		Recalled:       result.Recalled,
+		Filtered:       result.Filtered,
+		Threshold:      result.Threshold,
 		LatencyMS:      result.LatencyMS,
 		Hits:           hits,
 	}))

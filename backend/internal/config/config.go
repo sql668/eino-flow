@@ -263,7 +263,8 @@ const (
 	defaultMinIOBucket   = "einoflow"
 
 	// 分段向量集合名。改名等于换一个库，旧集合不会自动清理，因此不要在部署中途随意改。
-	defaultMilvusCollection = "einoflow_segments"
+	// v2：主键改为业务生成的 chunk_id（varchar）并补元数据字段（见 docs/PROGRESS.md）。
+	defaultMilvusCollection = "einoflow_segments_v2"
 
 	// Embedding 默认指向本机 Ollama + bge-m3（1024 维），理由见 docs/PROGRESS.md D5。
 	defaultEmbeddingProvider  = "ollama"

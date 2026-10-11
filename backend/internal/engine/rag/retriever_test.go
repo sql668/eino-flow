@@ -101,16 +101,16 @@ func (f *fakeVectorStore) Upsert(context.Context, []repository.VectorRecord) err
 	return nil
 }
 func (f *fakeVectorStore) DeleteByDocument(context.Context, uint64) (int64, error) { return 0, nil }
-func (f *fakeVectorStore) Delete(context.Context, []uint64) (int64, error)         { return 0, nil }
+func (f *fakeVectorStore) Delete(context.Context, []string) (int64, error)         { return 0, nil }
 func (f *fakeVectorStore) Close(context.Context) error                             { return nil }
 
 func (f *fakeVectorStore) Search(
-	_ context.Context, datasetID uint64, vector []float32, topK int,
+	_ context.Context, filter repository.SearchFilter, vector []float32,
 ) ([]repository.VectorMatch, error) {
 	f.searchCalls++
-	f.gotDataset = datasetID
+	f.gotDataset = filter.DatasetID
 	f.gotVector = vector
-	f.gotTopK = topK
+	f.gotTopK = filter.TopK
 	if f.searchErr != nil {
 		return nil, f.searchErr
 	}
@@ -120,9 +120,9 @@ func (f *fakeVectorStore) Search(
 // fakeSegmentRepo 只实现检索需要的那一个方法，其余方法直接 panic：
 // 一旦检索链路调用了预期之外的方法，测试会立刻失败而不是静默通过。
 type fakeSegmentRepo struct {
-	items   []repository.RetrievedSegment
-	listErr error
-	gotIDs  []uint64
+	items       []repository.RetrievedSegment
+	listErr     error
+	gotChunkIDs []string
 }
 
 func (f *fakeSegmentRepo) CreateBatch(context.Context, []*domainmodel.Segment) error {
@@ -139,9 +139,9 @@ func (f *fakeSegmentRepo) AttachVectorIDs(context.Context, uint64) (int64, error
 }
 
 func (f *fakeSegmentRepo) ListForRetrieval(
-	_ context.Context, _ uint64, ids []uint64,
+	_ context.Context, _ uint64, ids []string,
 ) ([]repository.RetrievedSegment, error) {
-	f.gotIDs = ids
+	f.gotChunkIDs = ids
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -177,14 +177,14 @@ func newTestRetrieverWith(
 func TestRetriever_Retrieve(t *testing.T) {
 	embedder := &fakeEmbedder{name: "fake-embed", dim: 4, vectors: [][]float32{{0.1, 0.2, 0.3, 0.4}}}
 	vectors := &fakeVectorStore{matches: []repository.VectorMatch{
-		{SegmentID: 11, Score: 0.91},
-		{SegmentID: 22, Score: 0.80},
+		{ChunkID: "chunk-11", Score: 0.91},
+		{ChunkID: "chunk-22", Score: 0.80},
 	}}
 	segments := &fakeSegmentRepo{items: []repository.RetrievedSegment{
 		// 刻意乱序返回：检索器必须按向量分数而不是按数据库返回顺序组装结果。
-		{Segment: &domainmodel.Segment{ID: 22, DocumentID: 2, Content: "第二段", Page: 2, TitlePath: []string{"B"}},
+		{Segment: &domainmodel.Segment{ID: 22, ChunkID: "chunk-22", DocumentID: 2, Content: "第二段", Page: 2, TitlePath: []string{"B"}},
 			DocumentName: "b.pdf"},
-		{Segment: &domainmodel.Segment{ID: 11, DocumentID: 1, Content: "第一段", Page: 1, Locator: "page:1/block:3",
+		{Segment: &domainmodel.Segment{ID: 11, ChunkID: "chunk-11", DocumentID: 1, Content: "第一段", Page: 1, Locator: "page:1/block:3",
 			Kind: "table", TitlePath: []string{"A", "A1"}}, DocumentName: "a.pdf"},
 	}}
 
@@ -201,8 +201,9 @@ func TestRetriever_Retrieve(t *testing.T) {
 	if len(out.Hits) != 2 {
 		t.Fatalf("命中数 = %d, 期望 2", len(out.Hits))
 	}
-	if out.Hits[0].SegmentID != 11 || out.Hits[1].SegmentID != 22 {
-		t.Errorf("命中顺序 = [%d %d], 期望按分数降序 [11 22]", out.Hits[0].SegmentID, out.Hits[1].SegmentID)
+	if out.Hits[0].ChunkID != "chunk-11" || out.Hits[1].ChunkID != "chunk-22" {
+		t.Errorf("命中顺序 = [%s %s], 期望按分数降序 [chunk-11 chunk-22]",
+			out.Hits[0].ChunkID, out.Hits[1].ChunkID)
 	}
 	if out.Hits[0].Rank != 1 || out.Hits[1].Rank != 2 {
 		t.Errorf("排名 = [%d %d], 期望 [1 2]", out.Hits[0].Rank, out.Hits[1].Rank)
@@ -237,11 +238,11 @@ func TestRetriever_Retrieve(t *testing.T) {
 func TestRetriever_RetrieveSkipsMissingSegment(t *testing.T) {
 	embedder := &fakeEmbedder{name: "fake-embed", dim: 2, vectors: [][]float32{{1, 0}}}
 	vectors := &fakeVectorStore{matches: []repository.VectorMatch{
-		{SegmentID: 11, Score: 0.9},
-		{SegmentID: 22, Score: 0.5},
+		{ChunkID: "chunk-11", Score: 0.9},
+		{ChunkID: "chunk-22", Score: 0.5},
 	}}
 	segments := &fakeSegmentRepo{items: []repository.RetrievedSegment{
-		{Segment: &domainmodel.Segment{ID: 22, Content: "仅此一段"}, DocumentName: "b.pdf"},
+		{Segment: &domainmodel.Segment{ID: 22, ChunkID: "chunk-22", Content: "仅此一段"}, DocumentName: "b.pdf"},
 	}}
 
 	out, err := newTestRetriever(embedder, vectors, segments).Retrieve(
@@ -249,7 +250,7 @@ func TestRetriever_RetrieveSkipsMissingSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("检索失败: %v", err)
 	}
-	if len(out.Hits) != 1 || out.Hits[0].SegmentID != 22 {
+	if len(out.Hits) != 1 || out.Hits[0].ChunkID != "chunk-22" {
 		t.Fatalf("命中 = %+v, 期望只保留存在的分段 22", out.Hits)
 	}
 	// 排名按实际返回顺序重排，不能留下空洞。
@@ -277,8 +278,8 @@ func TestRetriever_RetrieveEmptyResults(t *testing.T) {
 		t.Errorf("命中数 = %d, 期望 0", len(out.Hits))
 	}
 	// 没有命中就不该再查分段表，省一次无用的数据库往返。
-	if segments.gotIDs != nil {
-		t.Errorf("无命中时仍查询了分段表: %v", segments.gotIDs)
+	if segments.gotChunkIDs != nil {
+		t.Errorf("无命中时仍查询了分段表: %v", segments.gotChunkIDs)
 	}
 }
 
@@ -342,14 +343,14 @@ func TestRetriever_RetrievePropagatesErrors(t *testing.T) {
 func TestRetriever_Rerank(t *testing.T) {
 	embedder := &fakeEmbedder{name: "fake-embed", dim: 2, vectors: [][]float32{{1, 0}}}
 	vectors := &fakeVectorStore{matches: []repository.VectorMatch{
-		{SegmentID: 11, Score: 0.90}, // 向量最强，但重排认为它最不相关
-		{SegmentID: 22, Score: 0.80},
-		{SegmentID: 33, Score: 0.70}, // 向量最弱，重排认为它最相关
+		{ChunkID: "chunk-11", Score: 0.90}, // 向量最强，但重排认为它最不相关
+		{ChunkID: "chunk-22", Score: 0.80},
+		{ChunkID: "chunk-33", Score: 0.70}, // 向量最弱，重排认为它最相关
 	}}
 	segments := &fakeSegmentRepo{items: []repository.RetrievedSegment{
-		{Segment: &domainmodel.Segment{ID: 11, Content: "丙"}, DocumentName: "a.pdf"},
-		{Segment: &domainmodel.Segment{ID: 22, Content: "乙"}, DocumentName: "a.pdf"},
-		{Segment: &domainmodel.Segment{ID: 33, Content: "甲"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 11, ChunkID: "chunk-11", Content: "丙"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 22, ChunkID: "chunk-22", Content: "乙"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 33, ChunkID: "chunk-33", Content: "甲"}, DocumentName: "a.pdf"},
 	}}
 	reranker := &fakeReranker{name: "fake-rerank", scores: map[string]float32{"甲": 0.95, "乙": 0.5, "丙": 0.1}}
 
@@ -375,9 +376,9 @@ func TestRetriever_Rerank(t *testing.T) {
 	if len(out.Hits) != 2 {
 		t.Fatalf("命中数 = %d, 期望 2", len(out.Hits))
 	}
-	if out.Hits[0].SegmentID != 33 || out.Hits[1].SegmentID != 22 {
-		t.Fatalf("重排后顺序 = [%d %d], 期望 [33 22]",
-			out.Hits[0].SegmentID, out.Hits[1].SegmentID)
+	if out.Hits[0].SegmentID != 33 || out.Hits[1].ChunkID != "chunk-22" {
+		t.Fatalf("重排后顺序 = [%s %s], 期望 [chunk-33 chunk-22]",
+			out.Hits[0].ChunkID, out.Hits[1].ChunkID)
 	}
 	if out.Hits[0].Rank != 1 || out.Hits[1].Rank != 2 {
 		t.Errorf("排名未重排: [%d %d]", out.Hits[0].Rank, out.Hits[1].Rank)
@@ -394,7 +395,7 @@ func TestRetriever_Rerank(t *testing.T) {
 	if len(out.Candidates) != 3 {
 		t.Fatalf("候选数 = %d, 期望 3", len(out.Candidates))
 	}
-	if out.Candidates[0].SegmentID != 11 {
+	if out.Candidates[0].ChunkID != "chunk-11" {
 		t.Errorf("候选顺序应按向量分数: 首位 = %d, 期望 11", out.Candidates[0].SegmentID)
 	}
 	if out.Candidates[0].RerankScore != nil {
@@ -406,9 +407,9 @@ func TestRetriever_Rerank(t *testing.T) {
 // 必须说明「为什么没重排」，否则使用者会把「结果没变」误判成「重排没效果」。
 func TestRetriever_RerankDisabledByRequest(t *testing.T) {
 	embedder := &fakeEmbedder{name: "fake-embed", dim: 2, vectors: [][]float32{{1, 0}}}
-	vectors := &fakeVectorStore{matches: []repository.VectorMatch{{SegmentID: 11, Score: 0.9}}}
+	vectors := &fakeVectorStore{matches: []repository.VectorMatch{{ChunkID: "chunk-11", Score: 0.9}}}
 	segments := &fakeSegmentRepo{items: []repository.RetrievedSegment{
-		{Segment: &domainmodel.Segment{ID: 11, Content: "甲"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 11, ChunkID: "chunk-11", Content: "甲"}, DocumentName: "a.pdf"},
 	}}
 	reranker := &fakeReranker{name: "fake-rerank", scores: map[string]float32{"甲": 0.9}}
 
@@ -436,12 +437,12 @@ func TestRetriever_RerankDisabledByRequest(t *testing.T) {
 func TestRetriever_RerankNotConfigured(t *testing.T) {
 	embedder := &fakeEmbedder{name: "fake-embed", dim: 2, vectors: [][]float32{{1, 0}}}
 	vectors := &fakeVectorStore{matches: []repository.VectorMatch{
-		{SegmentID: 11, Score: 0.9},
-		{SegmentID: 22, Score: 0.8},
+		{ChunkID: "chunk-11", Score: 0.9},
+		{ChunkID: "chunk-22", Score: 0.8},
 	}}
 	segments := &fakeSegmentRepo{items: []repository.RetrievedSegment{
-		{Segment: &domainmodel.Segment{ID: 11, Content: "甲"}, DocumentName: "a.pdf"},
-		{Segment: &domainmodel.Segment{ID: 22, Content: "乙"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 11, ChunkID: "chunk-11", Content: "甲"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 22, ChunkID: "chunk-22", Content: "乙"}, DocumentName: "a.pdf"},
 	}}
 
 	// reranker 传 nil 表示解析器返回 ErrNotConfigured。
@@ -466,12 +467,12 @@ func TestRetriever_RerankNotConfigured(t *testing.T) {
 func TestRetriever_RerankFailureAuto(t *testing.T) {
 	embedder := &fakeEmbedder{name: "fake-embed", dim: 2, vectors: [][]float32{{1, 0}}}
 	vectors := &fakeVectorStore{matches: []repository.VectorMatch{
-		{SegmentID: 11, Score: 0.9},
-		{SegmentID: 22, Score: 0.8},
+		{ChunkID: "chunk-11", Score: 0.9},
+		{ChunkID: "chunk-22", Score: 0.8},
 	}}
 	segments := &fakeSegmentRepo{items: []repository.RetrievedSegment{
-		{Segment: &domainmodel.Segment{ID: 11, Content: "甲"}, DocumentName: "a.pdf"},
-		{Segment: &domainmodel.Segment{ID: 22, Content: "乙"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 11, ChunkID: "chunk-11", Content: "甲"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 22, ChunkID: "chunk-22", Content: "乙"}, DocumentName: "a.pdf"},
 	}}
 	reranker := &fakeReranker{name: "fake-rerank", err: errors.New("服务 503")}
 
@@ -491,9 +492,9 @@ func TestRetriever_RerankFailureAuto(t *testing.T) {
 // TestRetriever_RerankFailureStrict 覆盖 strict 档：宁可检索失败也要保证精排质量。
 func TestRetriever_RerankFailureStrict(t *testing.T) {
 	embedder := &fakeEmbedder{name: "fake-embed", dim: 2, vectors: [][]float32{{1, 0}}}
-	vectors := &fakeVectorStore{matches: []repository.VectorMatch{{SegmentID: 11, Score: 0.9}}}
+	vectors := &fakeVectorStore{matches: []repository.VectorMatch{{ChunkID: "chunk-11", Score: 0.9}}}
 	segments := &fakeSegmentRepo{items: []repository.RetrievedSegment{
-		{Segment: &domainmodel.Segment{ID: 11, Content: "甲"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 11, ChunkID: "chunk-11", Content: "甲"}, DocumentName: "a.pdf"},
 	}}
 	reranker := &fakeReranker{name: "fake-rerank", err: errors.New("服务 503")}
 
@@ -516,9 +517,9 @@ func TestRetriever_RerankFailureStrict(t *testing.T) {
 // 分数与候选对不上时必须拒绝，否则会张冠李戴地排序。
 func TestRetriever_RerankScoreCountMismatch(t *testing.T) {
 	embedder := &fakeEmbedder{name: "fake-embed", dim: 2, vectors: [][]float32{{1, 0}}}
-	vectors := &fakeVectorStore{matches: []repository.VectorMatch{{SegmentID: 11, Score: 0.9}}}
+	vectors := &fakeVectorStore{matches: []repository.VectorMatch{{ChunkID: "chunk-11", Score: 0.9}}}
 	segments := &fakeSegmentRepo{items: []repository.RetrievedSegment{
-		{Segment: &domainmodel.Segment{ID: 11, Content: "甲"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 11, ChunkID: "chunk-11", Content: "甲"}, DocumentName: "a.pdf"},
 	}}
 	// mismatchReranker 故意返回比候选更多的分数。
 	reranker := &mismatchReranker{}

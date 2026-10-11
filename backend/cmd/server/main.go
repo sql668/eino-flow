@@ -17,7 +17,6 @@ import (
 	enginemodel "einoflow-backend/internal/engine/model"
 	modelresolver "einoflow-backend/internal/engine/model/resolver"
 	"einoflow-backend/internal/engine/rag"
-	"einoflow-backend/internal/engine/rag/chunker"
 	"einoflow-backend/internal/engine/rag/loader"
 	"einoflow-backend/internal/engine/rag/loader/mineru"
 	"einoflow-backend/internal/engine/rag/loader/plaintext"
@@ -179,8 +178,13 @@ func main() {
 			log.Printf("关闭向量库连接失败: %v", err)
 		}
 	}()
+	// 向量集合同样在这里创建与校验维度，但**失败不阻止启动**：
+	// 向量库抖动、还没起来、或者容器正在重启时，整个后端起不来是过度反应——
+	// 界面、知识库管理、模型配置这些功能并不依赖向量库。
+	// 失败时打明确警告，并由 /readyz 持续暴露（它会把 Milvus 列为不可用）；
+	// 入库与检索会各自返回清晰的错误。
 	if err := vectorStore.EnsureCollection(ctx, embedder.Dimension()); err != nil {
-		log.Fatalf("初始化向量集合失败: %v", err)
+		log.Printf("警告：初始化向量集合失败，入库与检索将不可用: %v", err)
 	}
 	log.Printf("向量化模型就绪: %s（%d 维），向量集合: %s",
 		embedder.Name(), embedder.Dimension(), cfg.Milvus.Collection)
@@ -199,16 +203,18 @@ func main() {
 		Segments:  segmentRepository,
 		Tx:        client,
 		Resolver:  resolver,
-		ChunkOpts: chunker.Options{
-			MaxRunes: cfg.MinerU.ChunkMaxRunes,
-			MinRunes: cfg.MinerU.ChunkMinRunes,
-		},
-		Models:  modelResolver,
-		Vectors: vectorStore,
+		Models:    modelResolver,
+		Vectors:   vectorStore,
 	})
 
+	// 检索兜底参数：知识库没配过检索设置时用它（配过则以知识库为准）。
+	retrievalDefaults := service.RetrievalDefaults{
+		TopK:          cfg.Retrieval.TopK,
+		CandidateTopK: cfg.Retrieval.CandidateTopK,
+	}
+
 	documentService := service.NewDocumentService(
-		datasetRepository, documentRepository, segmentRepository, objectStore, pipeline)
+		datasetRepository, documentRepository, segmentRepository, objectStore, pipeline, retrievalDefaults)
 
 	modelConfigService := service.NewModelConfigService(service.ModelConfigDeps{
 		Cipher:    credentialCipher,
@@ -233,7 +239,7 @@ func main() {
 		datasetRepository,
 		retriever,
 		retrievalRepository,
-		service.RetrievalDefaults{TopK: cfg.Retrieval.TopK},
+		retrievalDefaults,
 	)
 
 	// 问答：Eino 编排（检索 → 提示 → 对话模型），事件通过 SSE 推送。

@@ -16,6 +16,9 @@ import (
 // uploadFormField 是上传接口里文件字段的名字。
 const uploadFormField = "file"
 
+// defaultUploaderID 是 V0.1 的上传人占位标识（尚无登录体系）。
+const defaultUploaderID = "local-user"
+
 // documentHandler 承载文档上传与查询的 HTTP 处理。
 type documentHandler struct {
 	documents *service.DocumentService
@@ -35,12 +38,18 @@ func registerDocumentRoutes(group *route.RouterGroup, documents *service.Documen
 // documentResponse 是文档的对外结构。
 // 刻意不暴露 source —— 那是对象存储内部的 key，属于实现细节。
 type documentResponse struct {
-	ID           uint64 `json:"id"`
-	DatasetID    uint64 `json:"datasetId"`
-	Name         string `json:"name"`
-	FileSize     int64  `json:"fileSize"`
-	Status       string `json:"status"`
+	ID        uint64 `json:"id"`
+	DatasetID uint64 `json:"datasetId"`
+	Name      string `json:"name"`
+	FileSize  int64  `json:"fileSize"`
+	Status    string `json:"status"`
+	// CharCount 是解析出的正文字符数，文档列表用它展示体量。
+	CharCount int `json:"charCount"`
+	// ChunkMode 是最终采用的分段模式；未入库时为空。
+	ChunkMode    string `json:"chunkMode"`
 	SegmentCount int    `json:"segmentCount"`
+	// Parsed 表示解析产物是否已就绪（工作台能否进入预览）。
+	Parsed       bool   `json:"parsed"`
 	ErrorMessage string `json:"errorMessage,omitempty"`
 	CreatedAt    string `json:"createdAt"`
 	UpdatedAt    string `json:"updatedAt"`
@@ -55,15 +64,20 @@ type documentListResponse struct {
 
 // segmentResponse 是分段的对外结构，带溯源信息供前端展示引用来源。
 type segmentResponse struct {
-	ID         uint64   `json:"id"`
-	ChunkIndex int      `json:"chunkIndex"`
-	Content    string   `json:"content"`
-	TokenCount int      `json:"tokenCount"`
-	Page       int      `json:"page"`
-	Locator    string   `json:"locator"`
-	Kind       string   `json:"kind"`
-	TitlePath  []string `json:"titlePath"`
-	CreatedAt  string   `json:"createdAt"`
+	ID uint64 `json:"id"`
+	// ChunkID 是向量库主键：界面上「按片段复查」与引用留痕都用它。
+	ChunkID    string `json:"chunkId"`
+	ChunkIndex int    `json:"chunkIndex"`
+	Content    string `json:"content"`
+	CharCount  int    `json:"charCount"`
+	// OverlapRunes 表示这条片段开头有多少字是与前一条重叠的窗口。
+	OverlapRunes int      `json:"overlapRunes"`
+	TokenCount   int      `json:"tokenCount"`
+	Page         int      `json:"page"`
+	Locator      string   `json:"locator"`
+	Kind         string   `json:"kind"`
+	TitlePath    []string `json:"titlePath"`
+	CreatedAt    string   `json:"createdAt"`
 }
 
 type segmentListResponse struct {
@@ -80,7 +94,10 @@ func newDocumentResponse(doc *model.Document) documentResponse {
 		Name:         doc.Name,
 		FileSize:     doc.FileSize,
 		Status:       string(doc.Status),
+		CharCount:    doc.CharCount,
+		ChunkMode:    doc.ChunkMode,
 		SegmentCount: doc.SegmentCount,
+		Parsed:       doc.ParsedKey != "",
 		ErrorMessage: doc.ErrorMessage,
 		CreatedAt:    formatTime(doc.CreatedAt),
 		UpdatedAt:    formatTime(doc.UpdatedAt),
@@ -89,15 +106,18 @@ func newDocumentResponse(doc *model.Document) documentResponse {
 
 func newSegmentResponse(segment *model.Segment) segmentResponse {
 	return segmentResponse{
-		ID:         segment.ID,
-		ChunkIndex: segment.ChunkIndex,
-		Content:    segment.Content,
-		TokenCount: segment.TokenCount,
-		Page:       segment.Page,
-		Locator:    segment.Locator,
-		Kind:       segment.Kind,
-		TitlePath:  segment.TitlePath,
-		CreatedAt:  formatTime(segment.CreatedAt),
+		ID:           segment.ID,
+		ChunkID:      segment.ChunkID,
+		ChunkIndex:   segment.ChunkIndex,
+		Content:      segment.Content,
+		CharCount:    segment.CharCount,
+		OverlapRunes: segment.OverlapRunes,
+		TokenCount:   segment.TokenCount,
+		Page:         segment.Page,
+		Locator:      segment.Locator,
+		Kind:         segment.Kind,
+		TitlePath:    segment.TitlePath,
+		CreatedAt:    formatTime(segment.CreatedAt),
 	}
 }
 
@@ -132,6 +152,9 @@ func (h *documentHandler) upload(ctx context.Context, c *app.RequestContext) {
 		Filename:  fileHeader.Filename,
 		Content:   content,
 		MIMEType:  fileHeader.Header.Get("Content-Type"),
+		// V0.1 还没有登录体系：先写占位值，字段与链路先通，
+		// 接入鉴权后换成真实用户标识即可（向量库元数据里已经在用）。
+		UserID: defaultUploaderID,
 	})
 	if err != nil {
 		writeServiceError(c, err)

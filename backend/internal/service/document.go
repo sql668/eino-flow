@@ -34,6 +34,9 @@ type UploadDocumentInput struct {
 	Filename  string
 	Content   []byte
 	MIMEType  string
+	// UserID 是上传人标识：随分段写入向量库元数据（权限过滤预留）。
+	// V0.1 还没有用户体系，由调用方给占位值。
+	UserID string
 }
 
 // ListDocumentsInput 是文档列表查询入参。
@@ -67,15 +70,34 @@ type SegmentListResult struct {
 	PageSize int
 }
 
-// DocumentService 承载文档上传、查询与入库任务调度。
+// ingestJob 是后台作业。
+//
+// 解析与入库分成两类：解析完停在「待确认」，由使用者确认分段配置后才会入库。
+type ingestJob struct {
+	documentID uint64
+	// kind 为 parse（解析）或 ingest（按配置入库）。
+	kind string
+	// config 仅在 kind=ingest 时使用。
+	config model.ChunkConfig
+}
+
+// 作业类型。
+const (
+	jobParse  = "parse"
+	jobIngest = "ingest"
+)
+
+// DocumentService 承载文档上传、查询与流水线调度。
 type DocumentService struct {
 	datasets  repository.DatasetRepository
 	documents repository.DocumentRepository
 	segments  repository.SegmentRepository
 	storage   repository.ObjectStore
 	pipeline  *rag.Pipeline
+	// retrievalDefaults 是检索配置的兜底值（知识库没配过时用）。
+	retrievalDefaults RetrievalDefaults
 
-	queue   chan uint64
+	queue   chan ingestJob
 	workers sync.WaitGroup
 }
 
@@ -86,14 +108,22 @@ func NewDocumentService(
 	segments repository.SegmentRepository,
 	storage repository.ObjectStore,
 	pipeline *rag.Pipeline,
+	retrievalDefaults RetrievalDefaults,
 ) *DocumentService {
+	if retrievalDefaults.TopK <= 0 {
+		retrievalDefaults.TopK = model.DefaultRetrievalTopK
+	}
+	if retrievalDefaults.CandidateTopK <= 0 {
+		retrievalDefaults.CandidateTopK = retrievalDefaults.TopK * 4
+	}
 	return &DocumentService{
-		datasets:  datasets,
-		documents: documents,
-		segments:  segments,
-		storage:   storage,
-		pipeline:  pipeline,
-		queue:     make(chan uint64, ingestQueueSize),
+		datasets:          datasets,
+		documents:         documents,
+		segments:          segments,
+		storage:           storage,
+		pipeline:          pipeline,
+		retrievalDefaults: retrievalDefaults,
+		queue:             make(chan ingestJob, ingestQueueSize),
 	}
 }
 
@@ -107,13 +137,13 @@ func (s *DocumentService) Start(ctx context.Context) {
 				select {
 				case <-ctx.Done():
 					return
-				case id, ok := <-s.queue:
+				case job, ok := <-s.queue:
 					if !ok {
 						return
 					}
-					if err := s.pipeline.Ingest(ctx, id); err != nil {
+					if err := s.runJob(ctx, job); err != nil {
 						// 失败状态已由流水线写入文档记录，这里记日志便于排查。
-						log.Printf("文档 %d 入库失败: %v", id, err)
+						log.Printf("文档 %d %s 失败: %v", job.documentID, job.kind, err)
 					}
 				}
 			}
@@ -166,6 +196,7 @@ func (s *DocumentService) Upload(ctx context.Context, in UploadDocumentInput) (*
 		Source:    key,
 		FileSize:  int64(len(in.Content)),
 		Status:    model.DocumentStatusPending,
+		UserID:    in.UserID,
 	}
 	if err := s.documents.Create(ctx, doc); err != nil {
 		// 元数据写失败时清理已上传的对象，避免留下无人引用的孤儿文件。
@@ -175,19 +206,33 @@ func (s *DocumentService) Upload(ctx context.Context, in UploadDocumentInput) (*
 		return nil, err
 	}
 
-	s.enqueue(doc.ID)
+	// 上传后先解析（解析产物落库），之后停「待确认」等使用者确认分段配置。
+	s.enqueue(ingestJob{documentID: doc.ID, kind: jobParse})
 	return doc, nil
 }
 
-// enqueue 投递解析任务。
-//
-// 队列满时不阻塞上传请求：宁可明确报错，也不要让 HTTP 请求挂住。
-// 代价是该文档会停在 pending，需要重试兜底——这属于持久队列要解决的问题。
-func (s *DocumentService) enqueue(id uint64) {
-	select {
-	case s.queue <- id:
+// runJob 执行一个后台作业。
+func (s *DocumentService) runJob(ctx context.Context, job ingestJob) error {
+	switch job.kind {
+	case jobParse:
+		return s.pipeline.Parse(ctx, job.documentID)
+	case jobIngest:
+		return s.pipeline.Ingest(ctx, job.documentID, job.config)
 	default:
-		log.Printf("入库队列已满，文档 %d 未投递（需人工重试或补持久队列）", id)
+		return fmt.Errorf("未知作业类型 %q", job.kind)
+	}
+}
+
+// enqueue 投递后台作业。
+//
+// 队列满时不阻塞请求：宁可明确报错，也不要让 HTTP 请求挂住。
+// 代价是该文档会停在当前状态，需要重试兜底——这属于持久队列要解决的问题。
+func (s *DocumentService) enqueue(job ingestJob) {
+	select {
+	case s.queue <- job:
+	default:
+		log.Printf("队列已满，文档 %d 的 %s 作业未投递（需人工重试或补持久队列）",
+			job.documentID, job.kind)
 	}
 }
 

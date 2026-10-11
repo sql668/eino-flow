@@ -44,9 +44,12 @@ milvus:
   username: ""
   password: ""
   database: einoflow
-  # 分段向量集合。所有知识库共用一个集合，靠 dataset_id 字段区分；
-  # 改这个名等于换一个向量库，旧集合不会自动清理。
-  collection: einoflow_segments
+  # 分段向量集合。所有知识库共用一个集合，靠 dataset_id 字段区分。
+  #
+  # v2 与 v1 的差异：主键从 int64 分段 ID 换成业务生成的 chunk_id（varchar），
+  # 并新增 user_id / title_path / page / kind 等元数据字段。主键类型变了，
+  # 无法在原集合上改，因此换名重建。旧集合不会自动清理，需要时可手动删除。
+  collection: einoflow_segments_v2
 
 # 向量化模型（Embedding）。当前指向本机 Ollama 的 bge-m3（1024 维），
 # 选型理由与实测数据见 docs/PROGRESS.md D5。

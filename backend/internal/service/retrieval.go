@@ -43,8 +43,11 @@ type SearchResult struct {
 	// RerankModel 为空表示本次未做重排；RerankSkipped 说明原因。
 	RerankModel   string
 	RerankSkipped string
-	// Recalled 是重排前的召回条数。
-	Recalled  int
+	// Recalled 是重排前的召回条数（含被阈值筛掉的）。
+	Recalled int
+	// Filtered 是被相似度阈值筛掉的条数；Threshold 是本次实际使用的阈值。
+	Filtered  int
+	Threshold float32
 	LatencyMS int
 	Hits      []rag.Hit
 }
@@ -68,9 +71,11 @@ type RetrievalService struct {
 	defaults  RetrievalDefaults
 }
 
-// RetrievalDefaults 是检索的兜底参数。
+// RetrievalDefaults 是检索的兜底参数（知识库没配过检索设置时使用）。
 type RetrievalDefaults struct {
 	TopK int
+	// CandidateTopK 是重排前的召回条数兜底值。
+	CandidateTopK int
 }
 
 // NewRetrievalService 构造检索服务。
@@ -105,22 +110,35 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 		return nil, fmt.Errorf("%w: 检索内容过长（最多 %d 个字符）", ErrInvalidInput, maxQueryRunes)
 	}
 
+	// 先确认知识库存在：否则「知识库不存在」会表现为「搜不到东西」，
+	// 使用者会去怀疑检索质量而不会想到是 ID 写错。
+	// 同时取出知识库级检索配置：TopK / 阈值 / 重排开关都以它为准，
+	// 请求没显式指定时就用知识库的设置（否则「知识库设置」形同虚设）。
+	dataset, err := s.datasets.GetByID(ctx, input.DatasetID)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	retrievalConfig := retrievalConfigOrDefault(dataset.RetrievalConfig, s.defaults)
+
 	topK := input.TopK
 	if topK <= 0 {
-		topK = s.defaults.TopK
+		topK = retrievalConfig.TopK
 	}
 	if topK > model.MaxRetrievalTopK {
 		return nil, fmt.Errorf("%w: topK 最大为 %d", ErrInvalidInput, model.MaxRetrievalTopK)
 	}
 	candidateTopK := input.CandidateTopK
+	if candidateTopK <= 0 {
+		candidateTopK = retrievalConfig.CandidateTopK
+	}
 	if candidateTopK > model.MaxCandidateTopK {
 		return nil, fmt.Errorf("%w: candidateTopK 最大为 %d", ErrInvalidInput, model.MaxCandidateTopK)
 	}
-
-	// 先确认知识库存在：否则「知识库不存在」会表现为「搜不到东西」，
-	// 使用者会去怀疑检索质量而不会想到是 ID 写错。
-	if _, err := s.datasets.GetByID(ctx, input.DatasetID); err != nil {
-		return nil, translateError(err)
+	// 重排开关：请求显式指定优先，否则用知识库配置。
+	rerank := input.Rerank
+	if rerank == nil {
+		enabled := retrievalConfig.Rerank
+		rerank = &enabled
 	}
 
 	started := time.Now()
@@ -129,7 +147,9 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 		Query:         query,
 		TopK:          topK,
 		CandidateTopK: candidateTopK,
-		Rerank:        input.Rerank,
+		Rerank:        rerank,
+		// 阈值来自知识库配置：这是「问什么都给一段」的解法，配置页可改。
+		ScoreThreshold: retrievalConfig.ScoreThreshold,
 	})
 	latency := time.Since(started)
 
@@ -139,7 +159,9 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 		EmbeddingModel: output.EmbeddingModel,
 		RerankModel:    output.RerankModel,
 		RerankSkipped:  output.RerankSkipped,
-		Recalled:       len(output.Candidates),
+		Recalled:       len(output.Candidates) + output.FilteredByThreshold,
+		Filtered:       output.FilteredByThreshold,
+		Threshold:      output.Threshold,
 		LatencyMS:      int(latency.Milliseconds()),
 		Hits:           output.Hits,
 	}

@@ -84,24 +84,24 @@ func TestStore_RoundTrip(t *testing.T) {
 	}
 
 	records := []repository.VectorRecord{
-		{SegmentID: 101, DatasetID: 1, DocumentID: 11, Vector: unitVector(dim, 0)},
-		{SegmentID: 102, DatasetID: 1, DocumentID: 11, Vector: unitVector(dim, 1)},
-		{SegmentID: 201, DatasetID: 2, DocumentID: 22, Vector: unitVector(dim, 2)},
+		{ChunkID: "chunk-101", DatasetID: 1, DocumentID: 11, UserID: "u1", TitlePath: "第一章 / 1.1", Page: 1, Kind: "text", Vector: unitVector(dim, 0)},
+		{ChunkID: "chunk-102", DatasetID: 1, DocumentID: 11, UserID: "u1", TitlePath: "第一章 / 1.1", Page: 1, Kind: "text", Vector: unitVector(dim, 1)},
+		{ChunkID: "chunk-201", DatasetID: 2, DocumentID: 22, UserID: "u1", TitlePath: "第一章 / 1.1", Page: 1, Kind: "text", Vector: unitVector(dim, 2)},
 	}
 	if err := store.Upsert(ctx, records); err != nil {
 		t.Fatalf("写入向量失败: %v", err)
 	}
 
 	// 1) 检索必须限定在指定知识库内：不做过滤会把别的知识库内容召回。
-	matches, err := store.Search(ctx, 1, unitVector(dim, 0), 10)
+	matches, err := store.Search(ctx, repository.SearchFilter{DatasetID: 1, TopK: 10}, unitVector(dim, 0))
 	if err != nil {
 		t.Fatalf("检索失败: %v", err)
 	}
 	if len(matches) != 2 {
 		t.Fatalf("知识库 1 命中 %d 条, 期望 2 条（相同条件的知识库 2 的数据不应被召回）", len(matches))
 	}
-	if matches[0].SegmentID != 101 {
-		t.Errorf("首位命中 = %d, 期望与查询向量同向的 101", matches[0].SegmentID)
+	if matches[0].ChunkID != "chunk-101" {
+		t.Errorf("首位命中 = %s, 期望与查询向量同向的 chunk-101", matches[0].ChunkID)
 	}
 	if matches[0].Score < matches[1].Score {
 		t.Errorf("命中未按相似度降序: %v", matches)
@@ -109,15 +109,15 @@ func TestStore_RoundTrip(t *testing.T) {
 
 	// 2) 覆盖写入：同一主键重复写入不应报错，也不应产生重复记录。
 	if err := store.Upsert(ctx, []repository.VectorRecord{
-		{SegmentID: 101, DatasetID: 1, DocumentID: 11, Vector: unitVector(dim, 3)},
+		{ChunkID: "chunk-101", DatasetID: 1, DocumentID: 11, UserID: "u1", TitlePath: "第一章 / 1.1", Page: 1, Kind: "text", Vector: unitVector(dim, 3)},
 	}); err != nil {
 		t.Fatalf("覆盖写入失败: %v", err)
 	}
-	matches, err = store.Search(ctx, 1, unitVector(dim, 3), 10)
+	matches, err = store.Search(ctx, repository.SearchFilter{DatasetID: 1, TopK: 10}, unitVector(dim, 3))
 	if err != nil {
 		t.Fatalf("覆盖后检索失败: %v", err)
 	}
-	if len(matches) != 2 || matches[0].SegmentID != 101 {
+	if len(matches) != 2 || matches[0].ChunkID != "chunk-101" {
 		t.Fatalf("覆盖写入后命中不符: %+v", matches)
 	}
 
@@ -129,7 +129,7 @@ func TestStore_RoundTrip(t *testing.T) {
 	if deleted == 0 {
 		t.Error("按文档删除返回 0 条，与预期不符")
 	}
-	matches, err = store.Search(ctx, 1, unitVector(dim, 0), 10)
+	matches, err = store.Search(ctx, repository.SearchFilter{DatasetID: 1, TopK: 10}, unitVector(dim, 0))
 	if err != nil {
 		t.Fatalf("删除后检索失败: %v", err)
 	}
@@ -138,10 +138,10 @@ func TestStore_RoundTrip(t *testing.T) {
 	}
 
 	// 4) 按分段主键删除。
-	if _, err := store.Delete(ctx, []uint64{201}); err != nil {
+	if _, err := store.Delete(ctx, []string{"chunk-201"}); err != nil {
 		t.Fatalf("按主键删除失败: %v", err)
 	}
-	if matches, err = store.Search(ctx, 2, unitVector(dim, 2), 10); err != nil {
+	if matches, err = store.Search(ctx, repository.SearchFilter{DatasetID: 2, TopK: 10}, unitVector(dim, 2)); err != nil {
 		t.Fatalf("检索知识库 2 失败: %v", err)
 	}
 	if len(matches) != 0 {
@@ -174,7 +174,7 @@ func TestStore_UpsertValidatesVectorDim(t *testing.T) {
 		t.Fatalf("建集合失败: %v", err)
 	}
 	err := store.Upsert(ctx, []repository.VectorRecord{
-		{SegmentID: 1, DatasetID: 1, DocumentID: 1, Vector: unitVector(4, 0)},
+		{ChunkID: "chunk-1", DatasetID: 1, DocumentID: 1, UserID: "u1", TitlePath: "第一章 / 1.1", Page: 1, Kind: "text", Vector: unitVector(4, 0)},
 	})
 	if !errors.Is(err, model.ErrDimensionMismatch) {
 		t.Fatalf("错误 = %v, 期望 ErrDimensionMismatch", err)

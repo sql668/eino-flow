@@ -13,7 +13,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
@@ -27,10 +29,25 @@ import (
 // 字段名集中定义：建集合、写入、检索三处必须完全一致。
 // 散落的字符串字面量一旦写错，表现是「检索永远没有结果」而不是报错，排查成本极高。
 const (
-	fieldSegmentID  = "segment_id"
+	// fieldChunkID 是业务生成的片段标识（UUID），作为集合主键。
+	// 用它而不是业务库自增 ID：向量库与业务库各自独立演进，换库/分库/重建索引
+	// 都不用改主键语义；检索拿到它回查 PostgreSQL 取正文。
+	fieldChunkID    = "chunk_id"
 	fieldDocumentID = "document_id"
 	fieldDatasetID  = "dataset_id"
+	fieldUserID     = "user_id"
+	fieldTitlePath  = "title_path"
+	fieldPage       = "page"
+	fieldKind       = "kind"
 	fieldEmbedding  = "embedding"
+)
+
+// 字符串字段长度上限。Milvus 要求 VarChar 显式声明 max_length。
+const (
+	chunkIDMaxLen   = 64
+	userIDMaxLen    = 64
+	titlePathMaxLen = 512
+	kindMaxLen      = 16
 )
 
 // HNSW 索引参数：
@@ -179,8 +196,9 @@ func (s *Store) createCollection(ctx context.Context, dim int) error {
 		// 主键不由 Milvus 生成：分段主键来自 PostgreSQL，两边的键必须一致才好对账。
 		WithAutoID(false).
 		WithField(entity.NewField().
-			WithName(fieldSegmentID).
-			WithDataType(entity.FieldTypeInt64).
+			WithName(fieldChunkID).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(chunkIDMaxLen).
 			WithIsPrimaryKey(true)).
 		WithField(entity.NewField().
 			WithName(fieldDocumentID).
@@ -189,12 +207,27 @@ func (s *Store) createCollection(ctx context.Context, dim int) error {
 			WithName(fieldDatasetID).
 			WithDataType(entity.FieldTypeInt64)).
 		WithField(entity.NewField().
+			WithName(fieldUserID).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(userIDMaxLen)).
+		WithField(entity.NewField().
+			WithName(fieldTitlePath).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(titlePathMaxLen)).
+		WithField(entity.NewField().
+			WithName(fieldPage).
+			WithDataType(entity.FieldTypeInt64)).
+		WithField(entity.NewField().
+			WithName(fieldKind).
+			WithDataType(entity.FieldTypeVarChar).
+			WithMaxLength(kindMaxLen)).
+		WithField(entity.NewField().
 			WithName(fieldEmbedding).
 			WithDataType(entity.FieldTypeFloatVector).
 			WithDim(int64(dim)))
 
 	option := milvusclient.NewCreateCollectionOption(s.collection, schema).
-		WithPKFieldName(fieldSegmentID).
+		WithPKFieldName(fieldChunkID).
 		WithVectorFieldName(fieldEmbedding).
 		// COSINE 对文本向量最稳妥：不依赖向量是否已归一化（bge-m3 输出未归一化）。
 		WithMetricType(entity.COSINE).
@@ -202,10 +235,11 @@ func (s *Store) createCollection(ctx context.Context, dim int) error {
 		WithIndexOptions(
 			milvusclient.NewCreateIndexOption(
 				s.collection, fieldEmbedding, index.NewHNSWIndex(entity.COSINE, hnswM, hnswEfConstruction)),
-			// 标量字段建倒排索引：检索时按 dataset_id 过滤、重建时按 document_id 删除，
-			// 没有索引这两类操作会退化成全量扫描。
+			// 标量字段建倒排索引：检索时按 dataset_id / document_id / user_id 过滤、
+			// 重建时按 document_id 删除，没有索引这些操作会退化成全量扫描。
 			milvusclient.NewCreateIndexOption(s.collection, fieldDatasetID, index.NewInvertedIndex()),
 			milvusclient.NewCreateIndexOption(s.collection, fieldDocumentID, index.NewInvertedIndex()),
+			milvusclient.NewCreateIndexOption(s.collection, fieldUserID, index.NewInvertedIndex()),
 		)
 
 	if err := s.client.CreateCollection(ctx, option); err != nil {
@@ -246,8 +280,8 @@ func vectorDim(collection *entity.Collection) (int, error) {
 
 // Upsert 实现 repository.VectorStore。
 //
-// 用 Upsert 而不是 Insert：同一分段重复入库（重试、重新解析）时，
-// Insert 会因主键重复直接失败，Upsert 则覆盖成最新向量。
+// 用 Upsert 而不是 Insert：同一片段重复入库（重试、重切）时，
+// Insert 会因主键重复直接失败，Upsert 则覆盖成最新向量与元数据。
 func (s *Store) Upsert(ctx context.Context, records []repository.VectorRecord) error {
 	if len(records) == 0 {
 		return nil
@@ -256,26 +290,39 @@ func (s *Store) Upsert(ctx context.Context, records []repository.VectorRecord) e
 		return errors.New("向量维度未知，必须先调用 EnsureCollection")
 	}
 
-	segmentIDs := make([]int64, 0, len(records))
+	chunkIDs := make([]string, 0, len(records))
 	documentIDs := make([]int64, 0, len(records))
 	datasetIDs := make([]int64, 0, len(records))
+	userIDs := make([]string, 0, len(records))
+	titlePaths := make([]string, 0, len(records))
+	pages := make([]int64, 0, len(records))
+	kinds := make([]string, 0, len(records))
 	vectors := make([][]float32, 0, len(records))
+
 	for i, record := range records {
 		if len(record.Vector) != s.dim {
 			return fmt.Errorf("%w: 第 %d 条向量是 %d 维，集合是 %d 维",
 				model.ErrDimensionMismatch, i, len(record.Vector), s.dim)
 		}
-		segmentIDs = append(segmentIDs, int64(record.SegmentID))
+		chunkIDs = append(chunkIDs, record.ChunkID)
 		documentIDs = append(documentIDs, int64(record.DocumentID))
 		datasetIDs = append(datasetIDs, int64(record.DatasetID))
+		userIDs = append(userIDs, record.UserID)
+		titlePaths = append(titlePaths, truncateVarchar(record.TitlePath, titlePathMaxLen))
+		pages = append(pages, int64(record.Page))
+		kinds = append(kinds, truncateVarchar(record.Kind, kindMaxLen))
 		vectors = append(vectors, record.Vector)
 	}
 
 	option := milvusclient.NewColumnBasedInsertOption(
 		s.collection,
-		column.NewColumnInt64(fieldSegmentID, segmentIDs),
+		column.NewColumnVarChar(fieldChunkID, chunkIDs),
 		column.NewColumnInt64(fieldDocumentID, documentIDs),
 		column.NewColumnInt64(fieldDatasetID, datasetIDs),
+		column.NewColumnVarChar(fieldUserID, userIDs),
+		column.NewColumnVarChar(fieldTitlePath, titlePaths),
+		column.NewColumnInt64(fieldPage, pages),
+		column.NewColumnVarChar(fieldKind, kinds),
 		column.NewColumnFloatVector(fieldEmbedding, s.dim, vectors),
 	)
 
@@ -297,15 +344,16 @@ func (s *Store) DeleteByDocument(ctx context.Context, documentID uint64) (int64,
 }
 
 // Delete 实现 repository.VectorStore。
-func (s *Store) Delete(ctx context.Context, segmentIDs []uint64) (int64, error) {
-	if len(segmentIDs) == 0 {
+func (s *Store) Delete(ctx context.Context, chunkIDs []string) (int64, error) {
+	if len(chunkIDs) == 0 {
 		return 0, nil
 	}
-	ids := make([]string, 0, len(segmentIDs))
-	for _, id := range segmentIDs {
-		ids = append(ids, fmt.Sprintf("%d", id))
+	quoted := make([]string, 0, len(chunkIDs))
+	for _, id := range chunkIDs {
+		// 主键是字符串，必须加引号并按 Milvus 表达式语法转义单引号。
+		quoted = append(quoted, "'"+strings.ReplaceAll(id, "'", `\'`)+"'")
 	}
-	expr := fmt.Sprintf("%s in [%s]", fieldSegmentID, strings.Join(ids, ", "))
+	expr := fmt.Sprintf("%s in [%s]", fieldChunkID, strings.Join(quoted, ", "))
 	return s.deleteByExpr(ctx, expr)
 }
 
@@ -320,22 +368,26 @@ func (s *Store) deleteByExpr(ctx context.Context, expr string) (int64, error) {
 
 // Search 实现 repository.VectorStore。
 func (s *Store) Search(
-	ctx context.Context, datasetID uint64, vector []float32, topK int,
+	ctx context.Context, filter repository.SearchFilter, vector []float32,
 ) ([]repository.VectorMatch, error) {
 	if len(vector) == 0 {
 		return nil, errors.New("查询向量为空")
 	}
-	if topK <= 0 {
-		return nil, fmt.Errorf("topK 必须为正数，当前为 %d", topK)
+	if filter.TopK <= 0 {
+		return nil, fmt.Errorf("TopK 必须为正数，当前为 %d", filter.TopK)
 	}
 	if s.dim > 0 && len(vector) != s.dim {
 		return nil, fmt.Errorf("%w: 查询向量是 %d 维，集合是 %d 维", model.ErrDimensionMismatch, len(vector), s.dim)
 	}
 
-	option := milvusclient.NewSearchOption(s.collection, topK, []entity.Vector{entity.FloatVector(vector)}).
+	expression, err := buildFilterExpression(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	option := milvusclient.NewSearchOption(s.collection, filter.TopK, []entity.Vector{entity.FloatVector(vector)}).
 		WithANNSField(fieldEmbedding).
-		// 只检索当前知识库：不做这个过滤就会跨库召回，把别的知识库内容答给用户。
-		WithFilter(fmt.Sprintf("%s == %d", fieldDatasetID, datasetID)).
+		WithFilter(expression).
 		// Strong 一致性：入库后立刻检索要能看到刚写入的向量。
 		// 默认的 Bounded 会有秒级可见性延迟，演示与测试时会表现为「刚上传完搜不到」。
 		WithConsistencyLevel(entity.ClStrong)
@@ -345,13 +397,13 @@ func (s *Store) Search(
 		return nil, fmt.Errorf("向量检索失败: %w", err)
 	}
 
-	matches := make([]repository.VectorMatch, 0, topK)
+	matches := make([]repository.VectorMatch, 0, filter.TopK)
 	for _, set := range resultSets {
 		if set.Err != nil {
 			return nil, fmt.Errorf("向量检索返回错误: %w", set.Err)
 		}
 		for i := 0; i < set.Len(); i++ {
-			id, err := set.IDs.GetAsInt64(i)
+			chunkID, err := set.IDs.GetAsString(i)
 			if err != nil {
 				return nil, fmt.Errorf("读取命中主键失败: %w", err)
 			}
@@ -359,10 +411,53 @@ func (s *Store) Search(
 			if i < len(set.Scores) {
 				score = set.Scores[i]
 			}
-			matches = append(matches, repository.VectorMatch{SegmentID: uint64(id), Score: score})
+			matches = append(matches, repository.VectorMatch{ChunkID: chunkID, Score: score})
 		}
 	}
 	return matches, nil
+}
+
+// buildFilterExpression 拼装 Milvus 过滤表达式。
+//
+// 过滤必须在这里完成（而不是取回结果再筛）：先取 TopK 再筛会出现结果塌陷——
+// 库里明明有匹配内容，却因为被筛掉而返回不足条数。
+func buildFilterExpression(filter repository.SearchFilter) (string, error) {
+	parts := []string{fmt.Sprintf("%s == %d", fieldDatasetID, filter.DatasetID)}
+	if len(filter.DocumentIDs) > 0 {
+		parts = append(parts, fmt.Sprintf("%s in [%s]", fieldDocumentID, joinInt64(filter.DocumentIDs)))
+	}
+	if len(filter.UserIDs) > 0 {
+		quoted := make([]string, 0, len(filter.UserIDs))
+		for _, id := range filter.UserIDs {
+			quoted = append(quoted, "'"+strings.ReplaceAll(id, "'", `\'`)+"'")
+		}
+		parts = append(parts, fmt.Sprintf("%s in [%s]", fieldUserID, strings.Join(quoted, ", ")))
+	}
+	return strings.Join(parts, " and "), nil
+}
+
+// joinInt64 把 ID 列表拼成表达式里的数组字面量。
+func joinInt64(values []uint64) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.FormatUint(value, 10))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// truncateVarchar 按字节截断字符串以适配 Milvus 的 max_length。
+//
+// 按字节而不是字符：Milvus 的 max_length 以字节计。
+// 截断时避免把多字节字符切成半个（否则写入会失败），因此回退到合法边界。
+func truncateVarchar(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	truncated := text[:maxLen]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
 }
 
 // Close 实现 repository.VectorStore。

@@ -31,5 +31,6 @@ func Register(h *server.Hertz, deps Deps) {
 	registerSearchRoutes(apiV1, deps.Searches)
 	registerModelConfigRoutes(apiV1, deps.ModelConfig)
 	registerChatRoutes(apiV1, deps.Chats)
+	registerChunkWorkbenchRoutes(apiV1, deps.Documents)
 	// TODO(V0.1): 继续挂载流式对话调试路由。
 }

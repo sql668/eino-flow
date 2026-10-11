@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -77,18 +78,47 @@ func (r *DocumentRepository) List(ctx context.Context, filter repository.Documen
 	return docs, total, nil
 }
 
-// UpdateIndexState 更新解析状态、分段数与失败原因。
-func (r *DocumentRepository) UpdateIndexState(
-	ctx context.Context, id uint64, status model.DocumentStatus, segmentCount int, errorMessage string,
+// UpdateParseState 更新解析阶段的状态与产物引用。
+func (r *DocumentRepository) UpdateParseState(
+	ctx context.Context, id uint64, status model.DocumentStatus,
+	parsedKey string, charCount int, errorMessage string,
 ) error {
 	result := r.client.DB(ctx).
 		Model(&model.Document{}).
 		Where("id = ?", id).
-		Select("status", "segment_count", "error_message").
-		Updates(&model.Document{
-			Status:       status,
-			SegmentCount: segmentCount,
-			ErrorMessage: errorMessage,
+		Updates(map[string]any{
+			"status":        string(status),
+			"parsed_key":    parsedKey,
+			"char_count":    charCount,
+			"error_message": errorMessage,
+			"updated_at":    time.Now(),
+		})
+	if result.Error != nil {
+		return fmt.Errorf("更新文档解析状态失败: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
+}
+
+// UpdateIndexState 更新入库阶段的状态、分段数与分段模式。
+//
+// 用 map 而不是 Updates(struct)：GORM 的 Updates(struct) 会跳过零值，
+// 而 segment_count=0、chunk_mode="" 在这里都是合法值（失败的文档要清零）。
+func (r *DocumentRepository) UpdateIndexState(
+	ctx context.Context, id uint64, status model.DocumentStatus,
+	segmentCount int, chunkMode string, errorMessage string,
+) error {
+	result := r.client.DB(ctx).
+		Model(&model.Document{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"status":        string(status),
+			"segment_count": segmentCount,
+			"chunk_mode":    chunkMode,
+			"error_message": errorMessage,
+			"updated_at":    time.Now(),
 		})
 	if result.Error != nil {
 		return fmt.Errorf("更新文档状态失败: %w", result.Error)
@@ -99,16 +129,27 @@ func (r *DocumentRepository) UpdateIndexState(
 	return nil
 }
 
-// SoftDelete 软删除文档。
+// SoftDelete 软删除文档，并**同步删除它的分段**（同一事务）。
+//
+// 分段必须一起删：文档被软删除后，检索侧虽然按「文档已就绪且未删除」过滤，
+// 但残留在库里的分段会继续占空间，也让「按 chunk_id 复查」查到已删除内容。
+// 向量侧由调用方（service）负责清理，跨库无法放进同一个事务。
 func (r *DocumentRepository) SoftDelete(ctx context.Context, id uint64) error {
-	result := r.client.DB(ctx).Where("id = ?", id).Delete(&model.Document{})
-	if result.Error != nil {
-		return fmt.Errorf("删除文档失败: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return repository.ErrNotFound
-	}
-	return nil
+	return r.client.WithinTransaction(ctx, func(txCtx context.Context) error {
+		if err := r.client.DB(txCtx).
+			Where("document_id = ?", id).
+			Delete(&model.Segment{}).Error; err != nil {
+			return fmt.Errorf("删除文档分段失败: %w", err)
+		}
+		result := r.client.DB(txCtx).Where("id = ?", id).Delete(&model.Document{})
+		if result.Error != nil {
+			return fmt.Errorf("软删除文档失败: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return repository.ErrNotFound
+		}
+		return nil
+	})
 }
 
 // SegmentRepository 是基于 PostgreSQL（GORM）的实现。
@@ -167,21 +208,6 @@ func (r *SegmentRepository) DeleteByDocument(ctx context.Context, documentID uin
 	return result.RowsAffected, nil
 }
 
-// AttachVectorIDs 为某文档的全部分段回填 vector_id。
-//
-// 向量主键就是分段主键，所以这里用一条 UPDATE 把 id 转成文本写回，
-// 而不是逐段回写：几百段的文档逐条更新会产生几百次往返。
-func (r *SegmentRepository) AttachVectorIDs(ctx context.Context, documentID uint64) (int64, error) {
-	result := r.client.DB(ctx).
-		Model(&model.Segment{}).
-		Where("document_id = ?", documentID).
-		Update("vector_id", gorm.Expr("id::text"))
-	if result.Error != nil {
-		return 0, fmt.Errorf("回填分段向量标识失败: %w", result.Error)
-	}
-	return result.RowsAffected, nil
-}
-
 // retrievedSegmentRow 是检索关联查询的扫描结构。
 //
 // Segment 用匿名嵌入让 GORM 把它的字段平铺到本结构上，省去逐字段赋值。
@@ -190,11 +216,11 @@ type retrievedSegmentRow struct {
 	DocumentName string `gorm:"column:document_name"`
 }
 
-// ListForRetrieval 按主键批量读取分段，并 JOIN 文档过滤掉不可检索的记录。
+// ListForRetrieval 按 chunk_id 批量读取分段，并 JOIN 文档过滤掉不可检索的记录。
 func (r *SegmentRepository) ListForRetrieval(
-	ctx context.Context, datasetID uint64, ids []uint64,
+	ctx context.Context, datasetID uint64, chunkIDs []string,
 ) ([]repository.RetrievedSegment, error) {
-	if len(ids) == 0 {
+	if len(chunkIDs) == 0 {
 		return []repository.RetrievedSegment{}, nil
 	}
 
@@ -206,7 +232,7 @@ func (r *SegmentRepository) ListForRetrieval(
 		Select("s.*, d.name AS document_name").
 		Joins("JOIN documents AS d ON d.id = s.document_id").
 		Where("s.dataset_id = ?", datasetID).
-		Where("s.id IN ?", ids).
+		Where("s.chunk_id IN ?", chunkIDs).
 		Where("d.deleted_at IS NULL AND d.status = ?", string(model.DocumentStatusReady)).
 		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("读取检索命中分段失败: %w", err)

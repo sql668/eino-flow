@@ -23,6 +23,12 @@ type RetrieveRequest struct {
 	// Rerank 为 nil 表示按默认策略（配了重排模型就用），
 	// true / false 用于显式开关——页面上的「开/关重排对比」就靠它。
 	Rerank *bool
+	// ScoreThreshold 是向量相似度阈值：低于它的候选直接丢弃（0 表示不启用）。
+	//
+	// 阈值作用在**向量分数**上而不是重排分数：两者的量纲不同
+	// （向量是余弦相似度，重排是归一化后的相关性），配置里给的 0.5 这类值
+	// 按语义就是针对召回阶段的；先筛再重排也顺带省掉无关候选的重排开销。
+	ScoreThreshold float32
 }
 
 // Hit 是一个命中片段，带齐前端展示引用所需的溯源信息。
@@ -30,6 +36,8 @@ type RetrieveRequest struct {
 // 内容与溯源字段一次性返回，而不是让前端拿 ID 再查一遍：
 // 检索结果页要展示的就是这些字段，二次查询会让命中数与展示数出现不一致的窗口。
 type Hit struct {
+	// ChunkID 是片段主键（向量库主键）：引用留痕与「按片段复查」都靠它。
+	ChunkID    string
 	SegmentID  uint64
 	DocumentID uint64
 	// DocumentName 是命中片段所属文档名，用于展示「出自哪份文档」。
@@ -64,6 +72,11 @@ type RetrieveOutput struct {
 	// RerankSkipped 记录「为什么没做重排」（未配置 / 被显式关闭）。
 	// 不记录的话，「结果没变」会被误判成「重排没效果」。
 	RerankSkipped string
+	// FilteredByThreshold 是被相似度阈值筛掉的候选数。
+	// 返回它是为了解释「为什么没结果」——否则使用者会以为检索坏了。
+	FilteredByThreshold int
+	// Threshold 是本次实际使用的阈值。
+	Threshold float32
 }
 
 // Retriever 执行「问题 → 向量 → 命中片段」的检索。
@@ -151,7 +164,10 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 		return RetrieveOutput{}, fmt.Errorf("向量化检索内容返回了 %d 条向量，期望 1 条", len(vectors))
 	}
 
-	matches, err := r.vectors.Search(ctx, req.DatasetID, vectors[0], candidateTopK)
+	matches, err := r.vectors.Search(ctx, repository.SearchFilter{
+		DatasetID: req.DatasetID,
+		TopK:      candidateTopK,
+	}, vectors[0])
 	if err != nil {
 		return RetrieveOutput{}, err
 	}
@@ -164,9 +180,10 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 		return output, nil
 	}
 
-	ids := make([]uint64, 0, len(matches))
+	// 向量库返回的是 chunk_id（业务生成的主键），按它回查 PostgreSQL 取正文。
+	ids := make([]string, 0, len(matches))
 	for _, match := range matches {
-		ids = append(ids, match.SegmentID)
+		ids = append(ids, match.ChunkID)
 	}
 	found, err := r.segments.ListForRetrieval(ctx, req.DatasetID, ids)
 	if err != nil {
@@ -175,18 +192,19 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 
 	// 向量库与业务库是两套存储，可能出现「向量在、分段不在」（文档刚被删除）的情况。
 	// 这里按向量分数顺序组装，找不到的分段直接跳过，因此命中数可能少于召回数。
-	byID := make(map[uint64]repository.RetrievedSegment, len(found))
+	byID := make(map[string]repository.RetrievedSegment, len(found))
 	for _, item := range found {
-		byID[item.Segment.ID] = item
+		byID[item.Segment.ChunkID] = item
 	}
 
 	for _, match := range matches {
-		item, ok := byID[match.SegmentID]
+		item, ok := byID[match.ChunkID]
 		if !ok {
 			continue
 		}
 		segment := item.Segment
 		output.Candidates = append(output.Candidates, Hit{
+			ChunkID:      segment.ChunkID,
 			SegmentID:    segment.ID,
 			DocumentID:   segment.DocumentID,
 			DocumentName: item.DocumentName,
@@ -202,6 +220,27 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 	}
 	if len(output.Candidates) == 0 {
 		return output, nil
+	}
+
+	// 相似度阈值过滤：在重排之前做，且把筛掉的数量带回去。
+	// bge-m3 对无关内容也会给出 0.45 左右的分数，不设阈值时「问什么都有一段最像的」。
+	if req.ScoreThreshold > 0 {
+		kept := output.Candidates[:0:0]
+		for _, hit := range output.Candidates {
+			if hit.VectorScore >= req.ScoreThreshold {
+				kept = append(kept, hit)
+			}
+		}
+		output.FilteredByThreshold = len(output.Candidates) - len(kept)
+		output.Threshold = req.ScoreThreshold
+		// 重新编号，保证 Rank 连续
+		for i := range kept {
+			kept[i].Rank = i + 1
+		}
+		output.Candidates = kept
+		if len(output.Candidates) == 0 {
+			return output, nil
+		}
 	}
 
 	// 第二阶段：重排。失败与「未配置」是两回事，必须分开处理。
