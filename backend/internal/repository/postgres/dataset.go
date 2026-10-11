@@ -73,14 +73,24 @@ func (r *DatasetRepository) List(ctx context.Context, filter repository.DatasetL
 
 // Update 更新知识库；记录不存在时返回 repository.ErrNotFound。
 func (r *DatasetRepository) Update(ctx context.Context, dataset *model.Dataset) error {
+	// 显式列出可更新列：GORM 的 Updates(struct) 会跳过零值，
+	// 而空白描述、空状态都是合法值；同时新增列（分段/检索配置）必须在这里出现，
+	// 否则调用方以为存上了、实际连 SQL 都没生成（这次就踩到了）。
+	//
+	// 两个配置列**按需加入**：它们是 NOT NULL 的 JSONB 列，传 nil 会被写成 SQL NULL
+	// 并直接撞约束（500）。nil 的语义定为「本次不改这一列」——
+	// 要清空就传一个非 nil 的空配置（落库成 '{}'，读取侧再按兜底值处理）。
+	columns := []string{"name", "description", "embedding_model", "status"}
+	if dataset.ChunkConfig != nil {
+		columns = append(columns, "chunk_config")
+	}
+	if dataset.RetrievalConfig != nil {
+		columns = append(columns, "retrieval_config")
+	}
 	result := r.client.DB(ctx).
 		Model(&model.Dataset{}).
 		Where("id = ?", dataset.ID).
-		// 显式列出可更新列：GORM 的 Updates(struct) 会跳过零值，
-		// 而空白描述、空状态都是合法值；同时新增列（分段/检索配置）必须在这里出现，
-		// 否则调用方以为存上了、实际连 SQL 都没生成（这次就踩到了）。
-		Select("name", "description", "embedding_model", "status",
-			"chunk_config", "retrieval_config").
+		Select(columns).
 		Updates(dataset)
 	if result.Error != nil {
 		return fmt.Errorf("更新知识库失败: %w", result.Error)

@@ -37,10 +37,15 @@ type Dataset struct {
 	// ChunkConfig 是知识库级的分段与清洗配置：新建文档时用它作为默认值。
 	// 存 JSONB 而不是拆成十几列：配置项还会继续长（父子分块、更多清洗规则），
 	// 每次加一项都改表不划算，而且这些字段从不需要按值过滤。
-	ChunkConfig *ChunkConfig `gorm:"serializer:json"`
+	//
+	// 标签里的 default:'{}' 不能省：列是 NOT NULL DEFAULT '{}'，而 Go 侧允许为 nil
+	// （nil = 没配过，用兜底值）。没有这个标签时 GORM 会显式写入 SQL NULL，
+	// 撞上 NOT NULL 约束——**新建知识库会直接 500**（已踩过）。
+	ChunkConfig *ChunkConfig `gorm:"serializer:json;default:'{}'"`
 	// RetrievalConfig 是知识库级的检索配置（TopK / 阈值 / 重排开关 / 权重）。
 	// 放在知识库而不是应用上：检索范围与质量参数跟「这批文档」强相关。
-	RetrievalConfig *RetrievalConfig `gorm:"serializer:json"`
+	// 与 ChunkConfig 同理，default:'{}' 用于让 GORM 在 nil 时交给数据库默认值。
+	RetrievalConfig *RetrievalConfig `gorm:"serializer:json;default:'{}'"`
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	DeletedAt       gorm.DeletedAt `gorm:"index"`
