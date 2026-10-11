@@ -404,14 +404,20 @@ export default function DatasetSettingsPage() {
               </Field>
               <Field
                 label="相似度阈值"
-                hint="0 表示不启用。只在向量检索下生效：全文检索的 BM25 分数没有上界，混合检索拿到的是融合分，都卡不住余弦阈值"
+                hint={
+                  retrieval.searchMode === "fulltext"
+                    ? "全文检索没有向量参与，也就没有余弦相似度可卡——这一项在全文检索下不生效（BM25 分数没有上界）。"
+                    : retrieval.searchMode === "hybrid"
+                      ? "0 表示不启用。混合检索下它作用在向量分上：向量分低于它的候选被丢弃；只被关键词命中（没有向量分）的片段不受影响。"
+                      : "0 表示不启用。低于它的候选直接丢弃，用来挡住「问什么都给一段」。"
+                }
               >
                 <Input
                   type="number"
                   step="0.05"
                   min={0}
                   max={1}
-                  disabled={retrieval.searchMode !== "vector"}
+                  disabled={retrieval.searchMode === "fulltext"}
                   value={retrieval.scoreThreshold}
                   onChange={(event) =>
                     setRetrieval({ ...retrieval, scoreThreshold: Number(event.target.value) })

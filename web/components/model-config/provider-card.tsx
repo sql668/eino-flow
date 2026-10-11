@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Field, Input, Select } from "@/components/ui/field";
 import { useModelConfigStore } from "@/stores/model-config-store";
 import type { ModelInstanceInfo, ModelKind, ModelProviderInfo, ProbeResultInfo } from "@/types/api";
@@ -45,6 +46,7 @@ export function ProviderCard({
   const bindGlobal = useModelConfigStore((state) => state.bindGlobal);
   const unbind = useModelConfigStore((state) => state.unbind);
   const bindings = useModelConfigStore((state) => state.bindings);
+  const { confirm, dialog } = useConfirm();
 
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(provider.configured);
@@ -124,8 +126,15 @@ export function ProviderCard({
             <Button
               variant="ghost"
               busy={busy}
-              onClick={() => {
-                if (window.confirm(`确定删除「${provider.displayName}」的配置吗？`)) {
+              onClick={async () => {
+                const ok = await confirm({
+                  title: `删除「${provider.displayName}」的凭证配置？`,
+                  description:
+                    "保存的凭证会被清除；已添加的模型会同时失效，需要重新配置凭证后才能使用。",
+                  confirmLabel: "删除配置",
+                  tone: "danger",
+                });
+                if (ok) {
                   void deleteProvider(provider.provider);
                 }
               }}
@@ -294,8 +303,14 @@ export function ProviderCard({
                       <Button
                         variant="danger"
                         busy={pending === `model:${model.id}`}
-                        onClick={() => {
-                          if (window.confirm(`确定删除模型「${model.modelName}」吗？`)) {
+                        onClick={async () => {
+                          const ok = await confirm({
+                            title: `删除模型「${model.modelName}」？`,
+                            description: "删除后，引用它的绑定会一起失效（应用或知识库需要改绑其它模型）。",
+                            confirmLabel: "删除",
+                            tone: "danger",
+                          });
+                          if (ok) {
                             void deleteModel(model.id);
                           }
                         }}
@@ -377,6 +392,7 @@ export function ProviderCard({
           ) : null}
         </div>
       ) : null}
+      {dialog}
     </section>
   );
 }

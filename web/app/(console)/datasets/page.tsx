@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { PageContainer } from "@/components/layout/page-container";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Field, Input, Panel } from "@/components/ui/field";
 import { datasetsApi } from "@/lib/api/console";
 import { ApiError } from "@/lib/http";
@@ -63,6 +64,8 @@ export default function DatasetsPage() {
       setCreating(false);
     }
   };
+
+  const { confirm, dialog } = useConfirm();
 
   return (
     <PageContainer className="flex flex-col gap-5 px-8 py-7">
@@ -173,8 +176,15 @@ export default function DatasetsPage() {
                     </Link>
                     <Button
                       variant="danger"
-                      onClick={() => {
-                        if (window.confirm(`确定删除知识库「${dataset.name}」吗？`)) {
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: `删除知识库「${dataset.name}」？`,
+                          description:
+                            "库内的文档、分段与向量都会被清理，检索将不再命中这些内容；原文件保留在对象存储中但不可再恢复。",
+                          confirmLabel: "删除",
+                          tone: "danger",
+                        });
+                        if (ok) {
                           void datasetsApi.remove(dataset.id).then(load);
                         }
                       }}
@@ -188,6 +198,7 @@ export default function DatasetsPage() {
           </ul>
         )}
       </Panel>
+      {dialog}
     </PageContainer>
   );
 }

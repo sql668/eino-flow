@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Panel } from "@/components/ui/field";
 import { chunkApi, documentsApi } from "@/lib/api/console";
 import { ApiError } from "@/lib/http";
@@ -34,6 +35,7 @@ const modeLabels: Record<string, string> = {
 
 export function DocumentTable({ datasetId }: { datasetId: number }) {
   const [documents, setDocuments] = useState<DocumentInfo[]>([]);
+  const { confirm, dialog } = useConfirm();
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -236,8 +238,15 @@ export function DocumentTable({ datasetId }: { datasetId: number }) {
                         <Button
                           variant="danger"
                           busy={busy === `delete-${doc.id}`}
-                          onClick={() => {
-                            if (window.confirm(`确定删除「${doc.name}」吗？`)) {
+                          onClick={async () => {
+                            const ok = await confirm({
+                              title: `删除文档「${doc.name}」？`,
+                              description:
+                                "该文档的分段与向量会被清理，检索不再命中它；原始文件保留在对象存储中，可重新上传后再次解析。",
+                              confirmLabel: "删除",
+                              tone: "danger",
+                            });
+                            if (ok) {
                               void runAction(`delete-${doc.id}`, () => documentsApi.remove(doc.id));
                             }
                           }}
@@ -254,6 +263,7 @@ export function DocumentTable({ datasetId }: { datasetId: number }) {
         </div>
       )}
       </div>
+      {dialog}
     </Panel>
   );
 }
