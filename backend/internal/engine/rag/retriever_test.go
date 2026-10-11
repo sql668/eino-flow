@@ -426,6 +426,58 @@ func TestRetriever_Rerank(t *testing.T) {
 	}
 }
 
+// TestRetriever_HybridThresholdFiltersVectorRoute 覆盖混合检索下的相似度阈值：
+// 低于阈值的**向量命中**要被筛掉，而只有关键词命中的候选（没有向量分）
+// 属于「靠关键词进来的」，不该被语义阈值误杀。
+func TestRetriever_HybridThresholdFiltersVectorRoute(t *testing.T) {
+	low, high := float32(0.42), float32(0.88)
+	embedder := &fakeEmbedder{name: "fake-embed", dim: 2, vectors: [][]float32{{1, 0}}}
+	vectors := &fakeVectorStore{matches: []repository.VectorMatch{
+		// 向量分低于阈值：应当被筛掉。
+		{ChunkID: "chunk-low", Score: 0.42, VectorScore: &low},
+		// 向量分达标：保留。
+		{ChunkID: "chunk-high", Score: 0.88, VectorScore: &high},
+		// 只有关键词命中：没有向量分，保留。
+		{ChunkID: "chunk-keyword", Score: 0.03, FullTextScore: &low},
+	}}
+	segments := &fakeSegmentRepo{items: []repository.RetrievedSegment{
+		{Segment: &domainmodel.Segment{ID: 1, ChunkID: "chunk-low", Content: "甲"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 2, ChunkID: "chunk-high", Content: "乙"}, DocumentName: "a.pdf"},
+		{Segment: &domainmodel.Segment{ID: 3, ChunkID: "chunk-keyword", Content: "丙"}, DocumentName: "a.pdf"},
+	}}
+
+	out, err := newTestRetriever(embedder, vectors, segments).Retrieve(context.Background(), rag.RetrieveRequest{
+		DatasetID: 1, Query: "问题", Mode: repository.SearchModeHybrid,
+		HybridRank: repository.HybridRankWeighted, ScoreThreshold: 0.6,
+	})
+	if err != nil {
+		t.Fatalf("检索失败: %v", err)
+	}
+	if vectors.gotMode != repository.SearchModeHybrid {
+		t.Errorf("传给向量库的检索方式 = %q, 期望 hybrid", vectors.gotMode)
+	}
+
+	ids := make(map[string]bool)
+	for _, hit := range out.Candidates {
+		ids[hit.ChunkID] = true
+	}
+	if ids["chunk-low"] {
+		t.Error("向量分 0.42 低于阈值 0.6，却被保留")
+	}
+	if !ids["chunk-high"] {
+		t.Error("向量分达标的候选被误删")
+	}
+	if !ids["chunk-keyword"] {
+		t.Error("只有关键词命中的候选没有向量分，不该被语义阈值筛掉")
+	}
+	if out.FilteredByThreshold != 1 {
+		t.Errorf("被阈值筛掉条数 = %d, 期望 1", out.FilteredByThreshold)
+	}
+	if out.Threshold != 0.6 {
+		t.Errorf("响应里的阈值 = %v, 期望 0.6", out.Threshold)
+	}
+}
+
 // TestRetriever_RerankDisabledByRequest 覆盖请求显式关闭重排：
 // 必须说明「为什么没重排」，否则使用者会把「结果没变」误判成「重排没效果」。
 func TestRetriever_RerankDisabledByRequest(t *testing.T) {

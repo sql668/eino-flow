@@ -29,8 +29,9 @@ type RetrieveRequest struct {
 	// （向量是余弦相似度，重排是归一化后的相关性），配置里给的 0.5 这类值
 	// 按语义就是针对召回阶段的；先筛再重排也顺带省掉无关候选的重排开销。
 	//
-	// 只在向量检索模式下生效：全文检索的 BM25 分数无上界、
-	// 混合检索拿到的是融合分数，拿余弦阈值去卡它们没有意义。
+	// 生效范围：向量检索（在 Go 侧筛，能统计筛掉几条）与混合检索
+	// （下推到向量路做 range 过滤——融合接口不回传单路分数，只能在服务端卡）；
+	// 全文检索下没有向量参与，这个阈值对它没有意义。
 	ScoreThreshold float32
 	// Mode 是检索方式（向量 / 全文 / 混合）；空值按向量检索处理。
 	Mode repository.SearchMode
@@ -265,12 +266,16 @@ func (r *Retriever) Retrieve(ctx context.Context, req RetrieveRequest) (Retrieve
 		return output, nil
 	}
 
-	// 相似度阈值过滤：只对向量检索生效（原因见 RetrieveRequest.ScoreThreshold）。
-	// 全文检索没有相似度可言；混合检索拿到的是融合分数，同样卡不住。
-	if req.ScoreThreshold > 0 && mode == repository.SearchModeVector {
+	// 相似度阈值过滤：作用在**向量分**上，向量检索与混合检索都生效
+	// （全文检索没有向量分，见 RetrieveRequest.ScoreThreshold）。
+	//
+	// 混合检索下对「同时被向量路召回」的候选按向量分筛；
+	// 只有关键词命中的候选没有向量分（不在 ANN 的 TopK 里），
+	// 它是靠关键词进来的，不该被语义阈值误杀，因此保留。
+	if req.ScoreThreshold > 0 && (mode == repository.SearchModeVector || mode == repository.SearchModeHybrid) {
 		kept := output.Candidates[:0:0]
 		for _, hit := range output.Candidates {
-			if hit.Score >= req.ScoreThreshold {
+			if hit.VectorScore == nil || *hit.VectorScore >= req.ScoreThreshold {
 				kept = append(kept, hit)
 			}
 		}

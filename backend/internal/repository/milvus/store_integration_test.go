@@ -315,4 +315,48 @@ func TestStore_HybridSearch(t *testing.T) {
 			}
 		})
 	}
+
+	// 两路原始分必须都带回来：留痕与「这条是靠语义还是靠关键词进来的」都依赖它。
+	//
+	// 这也是本地融合（而非服务端融合）的理由之一——服务端的融合只回传一个融合分。
+	weak := make([]float32, dim)
+	weak[0], weak[1] = 0.6, 0.8 // 与查询向量 (1,0,…) 的余弦是 0.6
+	if err := store.Upsert(ctx, []repository.VectorRecord{
+		{ChunkID: "chunk-weak", DatasetID: 1, DocumentID: 1, UserID: "u1", Page: 3, Kind: "text",
+			Content: "附件的包装清单与保修条款。", Vector: weak},
+	}); err != nil {
+		t.Fatalf("写入弱相关片段失败: %v", err)
+	}
+	matches, err := store.Search(ctx,
+		repository.SearchFilter{DatasetID: 1, TopK: 5},
+		repository.SearchQuery{
+			Mode:           repository.SearchModeHybrid,
+			Rank:           repository.HybridRankWeighted,
+			Text:           "万用表量程",
+			Vector:         unitVector(dim, 0),
+			VectorWeight:   0.5,
+			FullTextWeight: 0.5,
+		})
+	if err != nil {
+		t.Fatalf("混合检索失败: %v", err)
+	}
+	byID := make(map[string]repository.VectorMatch, len(matches))
+	for _, match := range matches {
+		byID[match.ChunkID] = match
+	}
+	if match, ok := byID["chunk-weak"]; !ok {
+		t.Error("弱相关片段未被召回：它应当由向量路召回（阈值是在上层按向量分筛的）")
+	} else if match.VectorScore == nil || match.FullTextScore != nil {
+		t.Errorf("弱相关片段的分数形态不符（期望只有向量分）: %+v", match)
+	}
+	if match, ok := byID["chunk-semantic"]; !ok {
+		t.Error("只有向量能召回的片段丢了")
+	} else if match.VectorScore == nil {
+		t.Error("向量路召回的片段没带回向量分")
+	}
+	if match, ok := byID["chunk-keyword"]; !ok {
+		t.Error("只有关键词能召回的片段丢了")
+	} else if match.FullTextScore == nil {
+		t.Error("关键词路召回的片段没带回全文分")
+	}
 }

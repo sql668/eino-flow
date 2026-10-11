@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -484,55 +485,223 @@ func (s *Store) Search(
 
 	switch mode {
 	case repository.SearchModeFullText:
-		resultSets, err := s.client.Search(ctx, milvusclient.
-			NewSearchOption(s.collection, filter.TopK, []entity.Vector{entity.Text(query.Text)}).
-			WithANNSField(fieldSparse).
-			WithFilter(expression).
-			WithConsistencyLevel(entity.ClStrong))
-		if err != nil {
-			return nil, fmt.Errorf("全文检索失败: %w", err)
-		}
-		return collectMatches(resultSets, filter.TopK, scoreRoute{fullText: true})
+		return s.searchSparse(ctx, filter.TopK, expression, query.Text)
 
 	case repository.SearchModeHybrid:
-		// 两路各召回 TopK 条再融合：融合只能从两路各自的候选里挑，
-		// 每路召回数与最终条数一致才不会出现「融合后不够数」。
-		option := milvusclient.NewHybridSearchOption(s.collection, filter.TopK,
-			// 过滤条件挂在每一路上（融合接口本身不接受过滤条件）：
-			// 只给一路加过滤会让另一路召回越界内容，融合后照样出现在结果里。
-			milvusclient.NewAnnRequest(fieldEmbedding, filter.TopK, entity.FloatVector(query.Vector)).
-				WithFilter(expression),
-			milvusclient.NewAnnRequest(fieldSparse, filter.TopK, entity.Text(query.Text)).
-				WithFilter(expression),
-		).
-			WithReranker(hybridReranker(query)).
-			WithConsistencyLevel(entity.ClStrong)
-
-		resultSets, err := s.client.HybridSearch(ctx, option)
-		if err != nil {
-			return nil, fmt.Errorf("混合检索失败: %w", err)
-		}
-		// 融合后 Milvus 只返回融合分数，两路各自的分不再回传（服务端不做这项透出）。
-		// 因此这里只填 Score，两路分数留空——总比填一个错的值要好。
-		return collectMatches(resultSets, filter.TopK, scoreRoute{fused: true})
+		return s.searchHybrid(ctx, filter.TopK, expression, query)
 	}
 
+	vectorMatches, err := s.searchVector(ctx, filter.TopK, expression, query.Vector)
+	if err != nil {
+		return nil, err
+	}
+	return vectorMatches, nil
+}
+
+// searchVector 走向量（dense）路召回。
+func (s *Store) searchVector(
+	ctx context.Context, limit int, expression string, vector []float32,
+) ([]repository.VectorMatch, error) {
 	resultSets, err := s.client.Search(ctx, milvusclient.
-		NewSearchOption(s.collection, filter.TopK, []entity.Vector{entity.FloatVector(query.Vector)}).
+		NewSearchOption(s.collection, limit, []entity.Vector{entity.FloatVector(vector)}).
 		WithANNSField(fieldEmbedding).
 		WithFilter(expression).
 		WithConsistencyLevel(entity.ClStrong))
 	if err != nil {
 		return nil, fmt.Errorf("向量检索失败: %w", err)
 	}
-	return collectMatches(resultSets, filter.TopK, scoreRoute{vector: true})
+	return collectMatches(resultSets, limit, scoreRoute{vector: true})
+}
+
+// searchSparse 走全文（BM25 稀疏）路召回：查询文本交给服务端的中文分析器切词。
+func (s *Store) searchSparse(
+	ctx context.Context, limit int, expression string, text string,
+) ([]repository.VectorMatch, error) {
+	resultSets, err := s.client.Search(ctx, milvusclient.
+		NewSearchOption(s.collection, limit, []entity.Vector{entity.Text(text)}).
+		WithANNSField(fieldSparse).
+		WithFilter(expression).
+		WithConsistencyLevel(entity.ClStrong))
+	if err != nil {
+		return nil, fmt.Errorf("全文检索失败: %w", err)
+	}
+	return collectMatches(resultSets, limit, scoreRoute{fullText: true})
+}
+
+// searchHybrid 两路各召回 TopK 条，再在本地融合。
+//
+// 为什么不在服务端融合（Milvus 有 HybridSearch + WeightedReranker/RRFReranker）：
+//   - 服务端的融合只回传一个融合分，两路各自的分数拿不到，于是
+//     「相似度阈值只卡向量那一路」这件事在服务端之外做不到（实测 range 搜索参数
+//     在 2.5.8 的 HNSW 索引上被静默忽略，既不过滤也不报错）；
+//   - 本地融合还有个额外好处：留痕能把两路原始分都记下来，
+//     使用者能看出「这条是靠语义还是靠关键词进来的」。
+//
+// 代价是两次 RPC（本机各几毫秒），换来的是可解释、可测、可控制的排序。
+func (s *Store) searchHybrid(
+	ctx context.Context, limit int, expression string, query repository.SearchQuery,
+) ([]repository.VectorMatch, error) {
+	// 两路都按 limit 召回：融合只能从两路候选里挑，每路召回少于最终条数会不够数。
+	vectorMatches, err := s.searchVector(ctx, limit, expression, query.Vector)
+	if err != nil {
+		return nil, err
+	}
+	textMatches, err := s.searchSparse(ctx, limit, expression, query.Text)
+	if err != nil {
+		return nil, err
+	}
+	return fuse(query, limit, vectorMatches, textMatches), nil
+}
+
+// fuse 把两路结果合成一个排序。
+//
+// 两种方式：
+//   - RRF：只用名次（1/(k+rank)），免疫两路分数量纲差异，不需要调参；
+//   - 加权：各自先做 min-max 归一化再按权重相加，可解释、可调，
+//     但归一化依赖候选集合（某一路出现极端高分时其余会被压低）。
+func fuse(
+	query repository.SearchQuery, limit int,
+	vectorMatches []repository.VectorMatch, textMatches []repository.VectorMatch,
+) []repository.VectorMatch {
+	type entry struct {
+		match repository.VectorMatch
+		score float64
+	}
+	merged := make(map[string]*entry, len(vectorMatches)+len(textMatches))
+	order := make([]string, 0, len(vectorMatches)+len(textMatches))
+	upsert := func(chunkID string) *entry {
+		if item, ok := merged[chunkID]; ok {
+			return item
+		}
+		item := &entry{match: repository.VectorMatch{ChunkID: chunkID}}
+		merged[chunkID] = item
+		order = append(order, chunkID)
+		return item
+	}
+
+	for _, match := range vectorMatches {
+		score := match.Score
+		item := upsert(match.ChunkID)
+		scoreCopy := score
+		item.match.VectorScore = &scoreCopy
+		item.match.Score = score
+	}
+	for _, match := range textMatches {
+		score := match.Score
+		item := upsert(match.ChunkID)
+		scoreCopy := score
+		item.match.FullTextScore = &scoreCopy
+	}
+
+	weights := normalizeWeights(query)
+	vectorNorm := minMaxScales(vectorMatches)
+	textNorm := minMaxScales(textMatches)
+
+	for _, chunkID := range order {
+		item := merged[chunkID]
+		switch query.Rank {
+		case repository.HybridRankRRF:
+			item.score = rankScore(chunkID, vectorMatches, textMatches)
+		default:
+			var score float64
+			if item.match.VectorScore != nil {
+				score += weights[0] * vectorNorm(*item.match.VectorScore)
+			}
+			if item.match.FullTextScore != nil {
+				score += weights[1] * textNorm(*item.match.FullTextScore)
+			}
+			item.score = score
+		}
+	}
+
+	matches := make([]repository.VectorMatch, 0, len(order))
+	for _, chunkID := range order {
+		item := merged[chunkID]
+		item.match.Score = float32(item.score)
+		matches = append(matches, item.match)
+	}
+	// 分数降序；同分按 chunk_id 兜底，保证同一份数据每次得到同样的顺序。
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].Score != matches[j].Score {
+			return matches[i].Score > matches[j].Score
+		}
+		return matches[i].ChunkID < matches[j].ChunkID
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return matches
+}
+
+// normalizeWeights 把权重收敛成和为 1 的 [向量权重, 全文权重]。
+func normalizeWeights(query repository.SearchQuery) [2]float64 {
+	vectorWeight, textWeight := query.VectorWeight, query.FullTextWeight
+	if vectorWeight <= 0 && textWeight <= 0 {
+		// 没给权重就按语义优先：中文短查询下向量检索通常更稳。
+		return [2]float64{0.5, 0.5}
+	}
+	total := vectorWeight + textWeight
+	return [2]float64{vectorWeight / total, textWeight / total}
+}
+
+// minMaxScales 生成某一路分数的归一化函数（把分数线性映射到 [0,1]）。
+//
+// 单一候选时按满分处理：否则「只有一条候选」会被归一化成 0 分，
+// 融合后被另一边彻底压过去，看起来像「这路没起作用」。
+func minMaxScales(matches []repository.VectorMatch) func(float32) float64 {
+	if len(matches) == 0 {
+		return func(float32) float64 { return 0 }
+	}
+	minScore, maxScore := matches[0].Score, matches[0].Score
+	for _, match := range matches[1:] {
+		if match.Score < minScore {
+			minScore = match.Score
+		}
+		if match.Score > maxScore {
+			maxScore = match.Score
+		}
+	}
+	if maxScore == minScore {
+		return func(float32) float64 { return 1 }
+	}
+	span := float64(maxScore - minScore)
+	return func(score float32) float64 {
+		return float64(score-minScore) / span
+	}
+}
+
+// rrfK 是 RRF 的平滑常数，取 60（Milvus 与常见实现的默认值）。
+const rrfK = 60.0
+
+// rankScore 计算某个候选的 RRF 分数：两路名次各贡献 1/(k+rank)，未出现的路不计。
+func rankScore(
+	chunkID string,
+	vectorMatches []repository.VectorMatch, textMatches []repository.VectorMatch,
+) float64 {
+	var score float64
+	if rank := rankOf(vectorMatches, chunkID); rank > 0 {
+		score += 1 / (rrfK + float64(rank))
+	}
+	if rank := rankOf(textMatches, chunkID); rank > 0 {
+		score += 1 / (rrfK + float64(rank))
+	}
+	return score
+}
+
+// rankOf 返回候选在某一路里的名次（从 1 开始），没出现返回 0。
+func rankOf(matches []repository.VectorMatch, chunkID string) int {
+	for index, match := range matches {
+		if match.ChunkID == chunkID {
+			return index + 1
+		}
+	}
+	return 0
 }
 
 // scoreRoute 描述本次检索走了哪一路，决定命中的分数往哪个字段填。
 type scoreRoute struct {
 	vector   bool
 	fullText bool
-	fused    bool
 }
 
 // collectMatches 把 Milvus 的检索结果整理成命中列表。
@@ -569,22 +738,6 @@ func collectMatches(
 		}
 	}
 	return matches, nil
-}
-
-// hybridReranker 按配置选择混合检索的融合方式。
-//
-// RRF 只看排名不看分数，天然免疫「余弦相似度在 0~1、BM25 无上界」这种量纲差异；
-// 加权融合可解释、可调，但权重需要按语料调。两条路都留着让使用者自己选。
-func hybridReranker(query repository.SearchQuery) milvusclient.Reranker {
-	if query.Rank == repository.HybridRankRRF {
-		return milvusclient.NewRRFReranker()
-	}
-	vectorWeight, fullTextWeight := query.VectorWeight, query.FullTextWeight
-	if vectorWeight <= 0 && fullTextWeight <= 0 {
-		// 没给权重就按语义优先：中文短查询下向量检索通常更稳。
-		vectorWeight, fullTextWeight = 0.5, 0.5
-	}
-	return milvusclient.NewWeightedReranker([]float64{vectorWeight, fullTextWeight})
 }
 
 // buildFilterExpression 拼装 Milvus 过滤表达式。
