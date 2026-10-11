@@ -76,6 +76,7 @@ func (c *ChatModel) Generate(
 	defer chunks.Close()
 
 	var builder strings.Builder
+	var reasoning strings.Builder
 	for {
 		chunk, err := chunks.Recv()
 		if err == io.EOF {
@@ -85,8 +86,11 @@ func (c *ChatModel) Generate(
 			return nil, err
 		}
 		builder.WriteString(chunk.Content)
+		reasoning.WriteString(chunk.ReasoningContent)
 	}
-	return schema.AssistantMessage(builder.String(), nil), nil
+	message := schema.AssistantMessage(builder.String(), nil)
+	message.ReasoningContent = reasoning.String()
+	return message, nil
 }
 
 // Stream 实现 Eino 的 BaseChatModel：逐块产出回答。
@@ -175,9 +179,13 @@ func (c *ChatModel) call(
 				writer.Send(nil, fmt.Errorf("Ollama 报错: %s", chunk.Error))
 				return
 			}
-			if chunk.Message.Content != "" {
-				if closed := writer.Send(
-					schema.AssistantMessage(chunk.Message.Content, nil), nil); closed {
+			// 思考内容（qwen3 这类推理模型会先产出 thinking）与正式回答分开送出：
+			// 它们的用途不同——思考过程只用于「让用户看到还在干活」，
+			// 正式回答才进正文与落库（见 service/chat.go）。
+			if chunk.Message.Content != "" || chunk.Message.Thinking != "" {
+				message := schema.AssistantMessage(chunk.Message.Content, nil)
+				message.ReasoningContent = chunk.Message.Thinking
+				if closed := writer.Send(message, nil); closed {
 					// 下游已经不再接收（客户端断开），停止读取，避免白烧算力。
 					return
 				}
@@ -204,6 +212,8 @@ type ollamaChatRequest struct {
 type ollamaChatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Thinking 是推理模型的思考过程（qwen3 等）。没有该字段的模型解析出来是空串。
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // ollamaChatResponse 对应 /api/chat 的一行响应（流式时每行一个）。

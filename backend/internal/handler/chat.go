@@ -124,6 +124,10 @@ func writeSSE(writer network.ExtWriter, event service.ChatEvent) error {
 		return writeSSEEvent(writer, service.ChatEventCitations, map[string]any{"citations": payload})
 	case service.ChatEventDelta:
 		return writeSSEEvent(writer, service.ChatEventDelta, map[string]string{"content": event.Content})
+	case service.ChatEventReasoning:
+		// 思考过程与回答同构（都是一段增量文本），单独一种事件类型是为了让前端
+		// 能把它渲染成「思考中」而不是混进正文。
+		return writeSSEEvent(writer, service.ChatEventReasoning, map[string]string{"content": event.Content})
 	case service.ChatEventDone:
 		return writeSSEEvent(writer, service.ChatEventDone, map[string]any{
 			"conversationId": event.ConversationID,

@@ -44,19 +44,25 @@ type ChatInput struct {
 // 流式事件类型。
 const (
 	ChatEventCitations = "citations"
+	// ChatEventReasoning 是推理模型的「思考过程」增量。
+	//
+	// 单独一种事件而不是混进 delta：思考内容不进正文、不落库，
+	// 它只解决「推理模型思考的十几秒里界面一片空白」。
+	ChatEventReasoning = "reasoning"
 	ChatEventDelta     = "delta"
 	ChatEventDone      = "done"
 )
 
 // ChatEvent 是流式问答的一个事件。
 //
-// 类型固定三种，前端按 type 分支处理，不需要解析文本去猜：
-// citations（引用片段，出第一段回答之前先给一次）、delta（增量文本）、done（结束与统计）。
+// 类型固定四种，前端按 type 分支处理，不需要解析文本去猜：
+// citations（引用片段，出第一段回答之前先给一次）、reasoning（思考过程增量）、
+// delta（回答增量）、done（结束与统计）。
 type ChatEvent struct {
 	Type string
 	// Citations 在 Type=citations 时有值。
 	Citations []model.MessageCitation
-	// Content 在 Type=delta 时有值。
+	// Content 在 Type=delta / reasoning 时有值。
 	Content string
 	// 以下字段在 Type=done 时有值。
 	ConversationID uint64
@@ -189,7 +195,17 @@ func (s *ChatService) Chat(ctx context.Context, input ChatInput, emit func(ChatE
 				return err
 			}
 		}
-		if chunk == nil || chunk.Content == "" {
+		if chunk == nil {
+			continue
+		}
+		// 思考过程先于回答出现（qwen3 这类推理模型）：转发它，界面才有东西可显示。
+		// 引用事件在此之前已发出，所以「来源 + 思考」会先铺满等待的空档。
+		if chunk.ReasoningContent != "" {
+			if err := emit(ChatEvent{Type: ChatEventReasoning, Content: chunk.ReasoningContent}); err != nil {
+				return err
+			}
+		}
+		if chunk.Content == "" {
 			continue
 		}
 		answer.WriteString(chunk.Content)
