@@ -216,6 +216,14 @@ export function DocumentTable({ datasetId }: { datasetId: number }) {
                           </Button>
                         )}
                         {doc.status === "ready" ? (
+                          <Link
+                            href={`/datasets/${datasetId}/documents/${doc.id}/segments`}
+                            className="rounded-md border border-grid px-2.5 py-1.5 text-xs text-ink transition-colors hover:border-ink-soft hover:bg-paper"
+                          >
+                            查看分段
+                          </Link>
+                        ) : null}
+                        {doc.status === "ready" ? (
                           <Button
                             busy={busy === `rechunk-${doc.id}`}
                             onClick={() =>

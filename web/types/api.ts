@@ -35,6 +35,12 @@ export interface SearchRequest {
 }
 
 /** 单个命中片段，带溯源信息。 */
+/** 检索方式：向量 / 全文 / 混合（与后端 model.SearchMode 一致）。 */
+export type SearchMode = "vector" | "fulltext" | "hybrid";
+
+/** 混合检索两路结果的融合方式（与后端 model.HybridRank 一致）。 */
+export type HybridRank = "weighted" | "rrf";
+
 export interface SearchHit {
   segmentId: number;
   documentId: number;
@@ -42,8 +48,14 @@ export interface SearchHit {
   documentName: string;
   /** 本次检索内的排名，从 1 开始 */
   rank: number;
-  /** 向量相似度（余弦，越大越相似） */
+  /** 决定本次排名的分数（单路检索是该路分数，混合检索是融合分） */
   score: number;
+  /** 向量路原始分；该路未参与本次检索时为空 */
+  vectorScore?: number;
+  /** 全文（BM25）路原始分；该路未参与本次检索时为空 */
+  fullTextScore?: number;
+  /** 重排分数；未做重排时为空 */
+  rerankScore?: number;
   content: string;
   chunkIndex: number;
   /** 分段起始页码，从 1 开始 */
@@ -64,6 +76,18 @@ export interface SearchResult {
   topK: number;
   /** 本次使用的向量模型 */
   embeddingModel: string;
+  /** 本次实际使用的检索方式 */
+  mode: SearchMode;
+  /** 重排模型；为空表示未做重排 */
+  rerankModel: string;
+  /** 未做重排的原因（未配置 / 已被关闭 / 服务不可用） */
+  rerankSkipped?: string;
+  /** 重排前的召回条数 */
+  recalled: number;
+  /** 被相似度阈值筛掉的条数（仅向量检索模式会筛） */
+  filtered: number;
+  /** 本次使用的相似度阈值 */
+  threshold: number;
   latencyMs: number;
   hits: SearchHit[];
 }
@@ -249,6 +273,8 @@ export interface SegmentInfo {
   locator: string;
   kind: string;
   titlePath: string[];
+  /** 分段关键词（自动生成、可人工修改；同时是全文检索的输入之一） */
+  keywords: string[];
   createdAt: string;
 }
 
@@ -355,6 +381,13 @@ export interface CleaningRuleConfig {
   pattern?: string;
 }
 
+/** 关键词抽取配置（入库时自动生成，可人工修改）。 */
+export interface KeywordConfig {
+  enabled: boolean;
+  /** 单段关键词数量上限 */
+  maxCount: number;
+}
+
 /** 分段与清洗配置。 */
 export interface ChunkConfig {
   mode: ChunkMode;
@@ -364,6 +397,8 @@ export interface ChunkConfig {
   minRunes: number;
   keepNoise: boolean;
   cleaning: CleaningRuleConfig[];
+  /** 关键词抽取配置；不传时后端按「开启、最多 5 个」处理 */
+  keywords?: KeywordConfig;
   /** 配置指纹（后端计算），用于识别「这批片段是哪套参数切的」 */
   version?: string;
 }
@@ -436,6 +471,10 @@ export interface PreviewResult {
 
 /** 知识库级检索配置。 */
 export interface RetrievalConfig {
+  /** 检索方式：向量 / 全文 / 混合 */
+  searchMode: SearchMode;
+  /** 混合检索的融合方式；仅 searchMode=hybrid 时有意义 */
+  hybridRank: HybridRank;
   topK: number;
   candidateTopK: number;
   scoreThreshold: number;

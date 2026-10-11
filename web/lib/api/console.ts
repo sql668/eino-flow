@@ -17,6 +17,7 @@ import type {
   DocumentInfo,
   DocumentListResult,
   MessageListResult,
+  SegmentInfo,
   SegmentListResult,
 } from "@/types/api";
 
@@ -102,6 +103,16 @@ export const documentsApi = {
   segments: (documentId: number, page = 1, pageSize = 20) =>
     http.get<SegmentListResult>(`/api/v1/documents/${documentId}/segments`, {
       query: { page, pageSize },
+    }),
+  /**
+   * 覆盖单个分段的关键词。
+   *
+   * 覆盖式（传什么就是什么）而不是增量：界面上是一个可增删的标签列表，
+   * 增量语义（加一个 / 删一个）在这里没有额外价值，反而容易与并发编辑打架。
+   */
+  updateSegmentKeywords: (documentId: number, segmentId: number, keywords: string[]) =>
+    http.put<SegmentInfo>(`/api/v1/documents/${documentId}/segments/${segmentId}/keywords`, {
+      keywords,
     }),
 };
 

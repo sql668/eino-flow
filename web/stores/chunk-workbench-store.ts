@@ -62,6 +62,8 @@ const emptyConfig: ChunkConfig = {
   minRunes: 40,
   keepNoise: false,
   cleaning: [],
+  // 关键词抽取默认开启：配置里没有这一项时，后端也按「开启、最多 5 个」处理。
+  keywords: { enabled: true, maxCount: 5 },
 };
 
 function describeError(error: unknown): string {

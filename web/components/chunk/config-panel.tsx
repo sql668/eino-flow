@@ -133,6 +133,43 @@ export function ChunkConfigPanel({ retrieval }: { retrieval: RetrievalConfig | n
           />
           保留页眉 / 页脚 / 页码（默认丢弃）
         </label>
+
+        {/* 关键词：入库时自动抽，抽不到也可以入库后再手工补（分段浏览页）。 */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-grid-soft pt-3">
+          <label className="flex items-center gap-2 text-xs text-ink-muted">
+            <input
+              type="checkbox"
+              checked={config.keywords?.enabled ?? true}
+              onChange={(event) =>
+                setConfig({
+                  keywords: {
+                    enabled: event.target.checked,
+                    maxCount: config.keywords?.maxCount ?? 5,
+                  },
+                })
+              }
+            />
+            自动抽取分段关键词
+          </label>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-ink-soft">每段最多</span>
+            <Input
+              type="number"
+              min={1}
+              max={10}
+              className="w-16"
+              value={config.keywords?.maxCount ?? 5}
+              onChange={(event) =>
+                setConfig({
+                  keywords: {
+                    enabled: config.keywords?.enabled ?? true,
+                    maxCount: Number(event.target.value),
+                  },
+                })
+              }
+            />
+          </div>
+        </div>
       </section>
 
       <section className="flex flex-col gap-3 border-t border-grid-soft pt-4">
@@ -205,6 +242,7 @@ export function ChunkConfigPanel({ retrieval }: { retrieval: RetrievalConfig | n
               label="语义 / 关键词"
               value={`${retrieval.vectorWeight} / ${retrieval.keywordWeight}`}
             />
+            <ReadOnlyItem label="检索方式" value={searchModeLabel(retrieval.searchMode)} />
           </dl>
         ) : (
           <p className="text-[11px] text-ink-soft">加载中…</p>
@@ -224,4 +262,16 @@ function ReadOnlyItem({ label, value }: { label: string; value: string }) {
       <dd className="reading text-ink">{value}</dd>
     </div>
   );
+}
+
+/** 检索方式的中文名。混合检索时把融合方式一起写出来，
+ * 因为这个只读区要回答的问题就是「这个库现在到底怎么找」。 */
+function searchModeLabel(mode: RetrievalConfig["searchMode"]): string {
+  if (mode === "fulltext") {
+    return "全文";
+  }
+  if (mode === "hybrid") {
+    return "混合";
+  }
+  return "向量";
 }
