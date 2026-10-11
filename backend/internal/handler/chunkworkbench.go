@@ -70,8 +70,12 @@ type chunkOptionsResponse struct {
 
 // chunkConfigResponse 是分段配置的对外结构。
 type chunkConfigResponse struct {
-	Mode         string                `json:"mode"`
-	Separator    string                `json:"separator"`
+	Mode string `json:"mode"`
+	// Separators 是自定义分隔符列表（仅 separator 模式使用）。
+	Separators []string `json:"separators"`
+	// Separator 仅用于兼容老前端（它可能只传单值字段）：
+	// toModel 会把它折叠进 Separators（见 model.ChunkConfig 的说明）。
+	Separator    string                `json:"separator,omitempty"`
 	MaxRunes     int                   `json:"maxRunes"`
 	OverlapRunes int                   `json:"overlapRunes"`
 	MinRunes     int                   `json:"minRunes"`
@@ -107,7 +111,7 @@ func newChunkConfigResponse(config model.ChunkConfig) chunkConfigResponse {
 	}
 	return chunkConfigResponse{
 		Mode:         string(config.Mode),
-		Separator:    config.Separator,
+		Separators:   stringSliceOrEmpty(config.Separators),
 		MaxRunes:     config.MaxRunes,
 		OverlapRunes: config.OverlapRunes,
 		MinRunes:     config.MinRunes,
@@ -132,6 +136,7 @@ func (r chunkConfigResponse) toModel() model.ChunkConfig {
 	}
 	return model.ChunkConfig{
 		Mode:         model.ChunkMode(r.Mode),
+		Separators:   r.Separators,
 		Separator:    r.Separator,
 		MaxRunes:     r.MaxRunes,
 		OverlapRunes: r.OverlapRunes,

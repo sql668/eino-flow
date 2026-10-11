@@ -59,13 +59,31 @@ const (
 	MaxChunkMinRunes     = 500
 	// DefaultOverlapPercent 是窗口重叠的默认比例（分段上限的 10%）。
 	DefaultOverlapPercent = 10
+
+	// MaxSeparators 是自定义分隔符的条数上限。
+	//
+	// 分隔符多了之后「到底按哪个切」会变得难以预期（每条都可能是别人的前缀），
+	// 而且切得越碎越不像「一条记录」。给个上限比事后解释便宜。
+	MaxSeparators = 10
+	// MaxSeparatorRunes 是单个分隔符的长度上限（字符数）。
+	// 分隔符是「边界标记」，超过这个长度更可能是使用者误把整段内容粘了进来。
+	MaxSeparatorRunes = 64
 )
 
 // ChunkConfig 是知识库级的分段与清洗配置。
 type ChunkConfig struct {
 	Mode ChunkMode `json:"mode"`
-	// Separator 仅在 Mode=separator 时使用。
-	Separator string `json:"separator"`
+	// Separators 是自定义分隔符列表，仅在 Mode=separator 时使用。
+	//
+	// 用列表而不是单个字符串：实际文档里「一条记录」的边界往往有几种写法
+	// （空行 + 分隔线 + 「第 N 条」），只给一个分隔符就得反复重切。
+	// 界面上按「英文逗号分隔」输入，字面逗号用 \, 转义（见 parseSeparators）。
+	Separators []string `json:"separators"`
+	// Separator 是**已废弃**的单值字段，只为读得懂老配置而保留。
+	//
+	// 老数据的 chunk_config 里存的是 "separator": "..."；Normalize 会把它
+	// 折叠进 Separators，之后不再写回。新代码请只用 Separators。
+	Separator string `json:"separator,omitempty"`
 	// MaxRunes 是单个片段的目标长度上限（字符数）。
 	MaxRunes int `json:"maxRunes"`
 	// OverlapRunes 是相邻片段的重叠窗口长度（字符数），默认取上限的 10%。
@@ -140,6 +158,10 @@ func (c ChunkConfig) Normalize() ChunkConfig {
 	if out.Mode == "" {
 		out.Mode = ChunkModeTitle
 	}
+	out.Separators = normalizeSeparators(out.Separator, out.Separators)
+	// 折叠完成后不再保留单值字段：否则同一份配置里出现两个「分隔符」，
+	// 改了一个忘了另一个，切分结果就对不上了。
+	out.Separator = ""
 	if out.MaxRunes <= 0 {
 		out.MaxRunes = DefaultChunkMaxRunes
 	}
@@ -174,6 +196,106 @@ func (c ChunkConfig) Normalize() ChunkConfig {
 	}
 	out.Keywords = &keywords
 	return out
+}
+
+// normalizeSeparators 把分隔符输入整理成可信的列表。
+//
+// 规则（与界面上的提示保持一致）：
+//   - 列表形态：界面按英文逗号分隔多条，字面逗号写成 `\,`；接口传的是数组，
+//     所以这里只负责逐项清理（老配置的单个字符串也走同一条路径）；
+//   - 转义：`\n` `\r` `\t` `\\` 还原成真实字符。界面上填的是「看得见的写法」——
+//     直接粘一个真实换行进去，既看不出粘对没有，也容易在保存时被裁掉；
+//   - 去空白、丢空项、去重、限条数与长度；
+//   - **按长度降序**：切分是按顺序逐个套用的（见 chunker.expandSeparator），
+//     长分隔符排在前面，`\n\n` 才不会被 `\n` 抢先切成空段。
+func normalizeSeparators(legacy string, list []string) []string {
+	raw := make([]string, 0, len(list)+1)
+	raw = append(raw, list...)
+	// 老配置（单值字段）视为「一个分隔符」，不按逗号拆：
+	// 老界面里逗号是字面量，拆开会把「用逗号切分 CSV」的配置改坏。
+	if len(raw) == 0 && strings.TrimSpace(legacy) != "" {
+		raw = append(raw, legacy)
+	}
+
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		value := unescapeSeparator(strings.TrimSpace(item))
+		if value == "" {
+			continue
+		}
+		if runes := []rune(value); len(runes) > MaxSeparatorRunes {
+			value = string(runes[:MaxSeparatorRunes])
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		left, right := []rune(out[i]), []rune(out[j])
+		if len(left) != len(right) {
+			return len(left) > len(right)
+		}
+		return out[i] < out[j]
+	})
+	if len(out) > MaxSeparators {
+		out = out[:MaxSeparators]
+	}
+	return out
+}
+
+// unescapeSeparator 还原分隔符里的转义写法。
+//
+// 只认这几个常见序列，其它反斜杠一律按字面保留：
+// 把「不认识的反斜杠」也吃掉，会让想用反斜杠当分隔符的人永远配不出来。
+func unescapeSeparator(value string) string {
+	if !strings.ContainsRune(value, '\\') {
+		return value
+	}
+	var builder strings.Builder
+	builder.Grow(len(value))
+	runes := []rune(value)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] != '\\' || i+1 >= len(runes) {
+			builder.WriteRune(runes[i])
+			continue
+		}
+		switch runes[i+1] {
+		case 'n':
+			builder.WriteRune('\n')
+		case 'r':
+			builder.WriteRune('\r')
+		case 't':
+			builder.WriteRune('\t')
+		case '\\':
+			builder.WriteRune('\\')
+		case ',':
+			builder.WriteRune(',')
+		default:
+			// 认不出的转义按原样保留（含那个反斜杠）。
+			builder.WriteRune(runes[i])
+			continue
+		}
+		i++
+	}
+	// 末尾落单的反斜杠已经在上面的分支里写进去了。
+	return builder.String()
+}
+
+// HasSeparator 判断配置里是否真的填了分隔符。
+//
+// 服务的校验与指纹都要问同一个问题，各写一次判断迟早会漂移。
+// 也要认得出老配置的单值字段：校验拿到的可能是**未规范化**的原始配置
+// （界面还在传 "separator": "\n\n" 时），只认列表会把老前端挡在门外。
+func (c ChunkConfig) HasSeparator() bool {
+	for _, item := range c.Separators {
+		if item != "" {
+			return true
+		}
+	}
+	return unescapeSeparator(strings.TrimSpace(c.Separator)) != ""
 }
 
 // normalizeCleaning 去重、排序并丢弃空规则，保证同样的勾选得到同样的指纹。
@@ -213,7 +335,7 @@ func (c ChunkConfig) EnabledCleaningKeys() []string {
 func (c ChunkConfig) Version() string {
 	parts := []string{
 		string(c.Mode),
-		c.Separator,
+		strings.Join(c.Separators, "\x1f"),
 		fmt.Sprint(c.MaxRunes),
 		fmt.Sprint(c.OverlapRunes),
 		fmt.Sprint(c.MinRunes),

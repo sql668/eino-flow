@@ -51,8 +51,11 @@ var ErrModeNotImplemented = errors.New("分段模式尚未实现")
 type Options struct {
 	// Mode 是分段模式；空值视为 title。
 	Mode model.ChunkMode
-	// Separator 仅在 Mode=separator 时使用（例如 "\n\n"）。
-	Separator string
+	// Separators 是自定义分隔符列表，仅在 Mode=separator 时使用。
+	//
+	// 多个分隔符按**长度降序**依次套用（长度已在 model 的 Normalize 里排好）：
+	// 先按最长的切，`\n\n` 才不会被 `\n` 抢先切成空段。
+	Separators []string
 	// MaxRunes 是单个片段的目标长度上限（按字符计）。
 	MaxRunes int
 	// OverlapRunes 是相邻片段的重叠窗口长度（字符数）。
@@ -151,7 +154,7 @@ func Split(doc *loader.ParsedDocument, opts Options) (Result, error) {
 
 	blocks := doc.Blocks
 	if opts.Mode == model.ChunkModeSeparator {
-		blocks = expandSeparator(blocks, opts.Separator)
+		blocks = expandSeparator(blocks, opts.Separators)
 	}
 
 	builder := &builder{opts: opts}
@@ -164,12 +167,12 @@ func Split(doc *loader.ParsedDocument, opts Options) (Result, error) {
 	return Result{Chunks: builder.chunks, Stats: stats, Hints: hints}, nil
 }
 
-// expandSeparator 按分隔符把块拆成更小的块。
+// expandSeparator 按分隔符列表把块拆成更小的块。
 //
 // 拆的时候保留原块的位置信息（页码/定位串）：片段溯源仍然指向原文位置，
 // 否则按分隔符切完之后就无法回答「这段来自哪一页」。
-func expandSeparator(blocks []loader.Block, separator string) []loader.Block {
-	if separator == "" || len(blocks) == 0 {
+func expandSeparator(blocks []loader.Block, separators []string) []loader.Block {
+	if len(separators) == 0 || len(blocks) == 0 {
 		return blocks
 	}
 	out := make([]loader.Block, 0, len(blocks))
@@ -178,7 +181,7 @@ func expandSeparator(blocks []loader.Block, separator string) []loader.Block {
 			out = append(out, block)
 			continue
 		}
-		parts := strings.Split(block.Text(), separator)
+		parts := splitBySeparators(block.Text(), separators)
 		if len(parts) <= 1 {
 			out = append(out, block)
 			continue
@@ -197,6 +200,33 @@ func expandSeparator(blocks []loader.Block, separator string) []loader.Block {
 			}
 			out = append(out, piece)
 		}
+	}
+	return out
+}
+
+// splitBySeparators 依次用每个分隔符切分，最后丢掉空白片段。
+//
+// 逐个套用（而不是一次性多分隔符扫描）的理由：优先级天然由顺序表达——
+// 长分隔符在前，`\n\n` 先切完，后面的 `\n` 就只在真正的单换行处生效。
+func splitBySeparators(text string, separators []string) []string {
+	parts := []string{text}
+	for _, separator := range separators {
+		if separator == "" {
+			continue
+		}
+		next := make([]string, 0, len(parts))
+		for _, part := range parts {
+			next = append(next, strings.Split(part, separator)...)
+		}
+		parts = next
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
 	}
 	return out
 }

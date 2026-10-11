@@ -588,7 +588,7 @@ const maxKeywordRunes = 32
 func toChunkOptions(config model.ChunkConfig) chunker.Options {
 	return chunker.Options{
 		Mode:         config.Mode,
-		Separator:    config.Separator,
+		Separators:   config.Separators,
 		MaxRunes:     config.MaxRunes,
 		OverlapRunes: config.OverlapRunes,
 		MinRunes:     config.MinRunes,

@@ -293,8 +293,11 @@ func validateChunkConfig(config model.ChunkConfig) error {
 		// 会以为功能生效了。
 		return fmt.Errorf("%w: 父子分段尚未实现，请先选择其它模式", ErrInvalidInput)
 	}
-	if config.Mode == model.ChunkModeSeparator && config.Separator == "" {
-		return fmt.Errorf("%w: 选择按分隔符分段时必须填写分隔符", ErrInvalidInput)
+	if config.Mode == model.ChunkModeSeparator && !config.HasSeparator() {
+		// 提示里带上转义写法：分隔符本身是英文逗号时，界面按逗号拆分会把它当成空输入，
+		// 不说明白的话，使用者只会看到「必须填写分隔符」而不知道该写什么。
+		return fmt.Errorf("%w: 选择按分隔符分段时必须填写分隔符（多个用英文逗号隔开；"+
+			"分隔符本身是逗号时写成 \\,）", ErrInvalidInput)
 	}
 	if config.MaxRunes < 0 || config.MaxRunes > model.MaxChunkMaxRunes {
 		return fmt.Errorf("%w: 分段长度上限需在 %d~%d 之间",
