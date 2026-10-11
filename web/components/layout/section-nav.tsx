@@ -3,10 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-// 二级导航面板（对齐 Dify 的「集成」面板）。
-//
-// Dify 的三栏结构是：全局导航 | 二级导航 | 内容。
-// 二级导航承担「同一大类下的互斥页面」，抽出来之后每加一个设置页只需在这里加一项。
+// 二级导航面板（设置区）。
+// 与全局导航的区别：这里是纸底 + 墨字（全局导航是墨底），形成「导航层级」的视觉分层。
 
 interface SectionItem {
   href: string;
@@ -26,15 +24,14 @@ export function SectionNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="flex w-[200px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-neutral-200 bg-white px-3 py-4">
+    <nav className="flex w-[188px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-grid bg-white px-2.5 py-4">
+      <span className="eyebrow px-2.5 pb-2">设置</span>
       {sections.map((item) => {
         const active = pathname.startsWith(item.href);
         const className = [
-          "flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors",
-          active
-            ? "bg-neutral-100 font-medium text-neutral-900"
-            : "text-neutral-600 hover:bg-neutral-50",
-          item.pending ? "cursor-not-allowed opacity-50" : "",
+          "relative flex items-center justify-between rounded px-2.5 py-2 text-[13px] transition-colors",
+          active ? "bg-pri-soft font-medium text-pri-ink" : "text-ink-muted hover:bg-paper hover:text-ink",
+          item.pending ? "cursor-not-allowed opacity-45" : "",
         ].join(" ");
 
         if (item.pending) {

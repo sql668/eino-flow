@@ -8,8 +8,9 @@ type Status = "idle" | "loading" | "ok" | "error";
 
 /**
  * 后端连通性探针。
- * 用途：验证统一请求封装（lib/http）与后端 /healthz 是否打通，
- * 骨架阶段作为前后端联调的快速自检手段。
+ *
+ * 展示形态按「仪表读数」来：状态用一个小圆点 + 等宽文字，不用大按钮。
+ * 它是个诊断读数，不该抢主操作的注意力。
  */
 export function HealthCheck() {
   const [status, setStatus] = useState<Status>("idle");
@@ -29,17 +30,27 @@ export function HealthCheck() {
     }
   }, []);
 
+  const tone =
+    status === "ok"
+      ? "bg-ok"
+      : status === "error"
+        ? "bg-fault"
+        : status === "loading"
+          ? "bg-warn"
+          : "bg-ink-soft";
+
   return (
-    <div className="flex items-center gap-3">
+    <span className="flex items-center gap-2">
+      <span className={`h-1.5 w-1.5 rounded-full ${tone}`} aria-hidden="true" />
+      <span className="reading text-xs text-ink-muted">{message}</span>
       <button
         type="button"
         onClick={check}
         disabled={status === "loading"}
-        className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm transition-colors hover:bg-neutral-100 disabled:opacity-50"
+        className="rounded border border-grid px-2 py-0.5 text-[11px] text-ink-muted transition-colors hover:border-ink-soft hover:bg-paper disabled:opacity-50"
       >
-        检测后端连接
+        重新检测
       </button>
-      <span className="text-sm text-neutral-600">{message}</span>
-    </div>
+    </span>
   );
 }

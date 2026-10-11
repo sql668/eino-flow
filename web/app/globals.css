@@ -3,21 +3,12 @@
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* 布局与滚动见 web/AGENTS.md：文档本身不滚动，只有明确标记的滚动区有滚动条 */
+  color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-/* 布局约定（见 web/AGENTS.md「滚动」）：文档本身不滚动，
-   只有明确标记为滚动区的容器才有滚动条。
-   做法：把 html/body 固定为一屏高且不溢出，再由 AppShell 决定哪一块滚动。
-   这样侧边导航不会跟着内容滚走，也不会出现「整页滚动 + 区域滚动」双重滚动条。 */
+/* 布局约定（见 web/AGENTS.md「滚动」）：
+   把 html/body 固定为一屏高且不溢出，再由 AppShell 决定哪一块滚动。 */
 html,
 body {
   height: 100%;
@@ -25,9 +16,43 @@ body {
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  @apply bg-paper text-ink font-sans antialiased;
+  font-size: 14px;
+}
+
+/* 键盘可见焦点：设计再克制也不能砍掉可达性（skill 的质量底线） */
+:focus-visible {
+  outline: 2px solid theme("colors.pri.DEFAULT");
+  outline-offset: 1px;
+}
+
+/* 尊重系统的减少动效设置 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@layer components {
+  /* 图纸网格底纹：铺在内容区最底层，给「工程图纸」定调。
+     刻意做得极淡（4.5% 不透明度）——它是背景材质，不是装饰图案。 */
+  .blueprint-grid {
+    @apply bg-blueprint bg-blueprint;
+  }
+
+  /* 区块眉标：大写 + 字距的标注字，用来标明「这一块是什么」。 */
+  .eyebrow {
+    @apply text-label uppercase tracking-[0.14em] text-ink-soft font-medium;
+  }
+
+  /* 读数：所有数字（字数、段数、耗时、指纹、id）都用它，
+     靠 tabular-nums 让多行数字对齐——这是仪表盘的基本要求。 */
+  .reading {
+    @apply font-mono tabular-nums;
+  }
 }
 
 @layer utilities {

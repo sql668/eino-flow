@@ -5,19 +5,21 @@ import { useCallback, useEffect, useState } from "react";
 
 import { PageContainer } from "@/components/layout/page-container";
 import { Button } from "@/components/ui/button";
-import { Field, Input } from "@/components/ui/field";
+import { Field, Input, Panel } from "@/components/ui/field";
 import { datasetsApi } from "@/lib/api/console";
 import { ApiError } from "@/lib/http";
 import type { DatasetInfo } from "@/types/api";
 
-// 知识库列表页。
+// 知识库列表。
 //
-// 知识库是「文档 → 解析 → 切分 → 向量化」的容器；创建后进入详情页上传文档。
+// 布局思路：把「知识库」当成一组待检对象列出来——每行一条，行内右侧是它的读数
+// （状态 / 向量模型 / 创建时间），而不是做成卡片墙。卡片墙适合浏览图片，
+// 这类「以参数与状态为主」的资源列表用行式布局扫读更快。
 
-const statusLabels: Record<string, string> = {
-  active: "可用",
-  indexing: "索引中",
-  error: "异常",
+const statusMeta: Record<string, { label: string; className: string }> = {
+  active: { label: "可用", className: "bg-ok-soft text-ok" },
+  indexing: { label: "索引中", className: "bg-warn-soft text-warn" },
+  error: { label: "异常", className: "bg-fault-soft text-fault" },
 };
 
 export default function DatasetsPage() {
@@ -64,101 +66,128 @@ export default function DatasetsPage() {
 
   return (
     <PageContainer className="flex flex-col gap-5 px-8 py-7">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold tracking-tight">知识库</h1>
-        <p className="text-sm leading-6 text-neutral-600">
-          上传文档后，平台会解析、切分并向量化入库；文档处理完成后即可在「知识库问答」应用里被检索到。
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <span className="eyebrow">知识库</span>
+          <h1 className="text-[22px] font-semibold tracking-tight text-ink">文档与检索</h1>
+          <p className="max-w-2xl text-sm leading-6 text-ink-muted">
+            上传文档后先解析，再由你确认分段与清洗才入库；入库后即可在「知识库问答」应用里被检索到。
+          </p>
+        </div>
+        <span className="reading text-xs text-ink-soft">
+          {datasets.length} 个知识库{loading ? " · 刷新中" : ""}
+        </span>
       </header>
 
       {error ? (
-        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        <p className="rounded border border-fault/30 bg-fault-soft px-3 py-2 text-sm text-fault">
+          {error}
+        </p>
       ) : null}
 
-      <section className="flex flex-wrap items-end gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3">
-        <div className="min-w-48 flex-1">
-          <Field label="知识库名" required>
-            <Input
-              value={form.name}
-              onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-              placeholder="产品手册库"
-            />
-          </Field>
+      <Panel eyebrow="新建" title="创建一个知识库">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-48 flex-1">
+            <Field label="名称" required>
+              <Input
+                value={form.name}
+                onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+                placeholder="产品手册库"
+              />
+            </Field>
+          </div>
+          <div className="min-w-48 flex-[2]">
+            <Field label="描述" hint="给未来的自己留一句说明：这批文档是干什么用的。">
+              <Input
+                value={form.description}
+                onChange={(event) =>
+                  setForm((prev) => ({ ...prev, description: event.target.value }))
+                }
+                placeholder="可选"
+              />
+            </Field>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="h-4" aria-hidden="true" />
+            <Button variant="primary" busy={creating} onClick={handleCreate}>
+              创建
+            </Button>
+          </div>
         </div>
-        <div className="min-w-48 flex-[2]">
-          <Field label="描述" hint="给未来的自己留一句说明：这批文档是干什么用的。">
-            <Input
-              value={form.description}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, description: event.target.value }))
-              }
-              placeholder="可选"
-            />
-          </Field>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <span className="h-4" aria-hidden="true" />
-          <Button variant="primary" busy={creating} onClick={handleCreate}>
-            创建知识库
-          </Button>
-        </div>
-      </section>
+      </Panel>
 
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center gap-3">
-          <h2 className="text-sm font-medium text-neutral-500">
-            全部知识库（{datasets.length}）
-          </h2>
+      <Panel
+        eyebrow="全部"
+        title="知识库清单"
+        reading={`${datasets.length} 项`}
+        actions={
           <Button busy={loading} onClick={() => void load()}>
             刷新
           </Button>
-        </div>
-
+        }
+      >
         {datasets.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-neutral-300 px-4 py-8 text-center text-xs text-neutral-400">
+          <p className="py-8 text-center text-xs text-ink-soft">
             {loading ? "加载中…" : "还没有知识库，先在上面创建一个"}
           </p>
         ) : (
-          <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {datasets.map((dataset) => (
-              <li
-                key={dataset.id}
-                className="flex flex-col gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-3"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-semibold text-neutral-900">
-                    {dataset.name}
+          <ul className="divide-y divide-grid-soft">
+            {datasets.map((dataset, index) => {
+              const meta = statusMeta[dataset.status] ?? {
+                label: dataset.status,
+                className: "bg-grid-soft text-ink-muted",
+              };
+              return (
+                <li key={dataset.id} className="flex flex-wrap items-center gap-3 py-3">
+                  <span className="reading w-8 text-xs text-ink-soft">
+                    {String(index + 1).padStart(2, "0")}
                   </span>
-                  <span className="shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-600">
-                    {statusLabels[dataset.status] ?? dataset.status}
+                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <div className="flex items-center gap-2">
+                      <Link
+                        href={`/datasets/${dataset.id}`}
+                        className="truncate text-sm font-medium text-ink hover:text-pri"
+                      >
+                        {dataset.name}
+                      </Link>
+                      <span className={`rounded-sm px-1.5 py-0.5 text-[11px] ${meta.className}`}>
+                        {meta.label}
+                      </span>
+                    </div>
+                    <span className="truncate text-xs text-ink-muted">
+                      {dataset.description || "（无描述）"}
+                    </span>
+                  </div>
+                  <span className="reading hidden text-xs text-ink-soft sm:block">
+                    {dataset.embeddingModel || "跟随全局模型"}
                   </span>
-                </div>
-                <p className="min-h-10 text-xs leading-5 text-neutral-500">
-                  {dataset.description || "（无描述）"}
-                </p>
-                <div className="flex items-center gap-2">
-                  <Link
-                    href={`/datasets/${dataset.id}`}
-                    className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs text-white transition-colors hover:bg-neutral-700"
-                  >
-                    管理文档
-                  </Link>
-                  <Button
-                    variant="danger"
-                    onClick={() => {
-                      if (window.confirm(`确定删除知识库「${dataset.name}」吗？`)) {
-                        void datasetsApi.remove(dataset.id).then(load);
-                      }
-                    }}
-                  >
-                    删除
-                  </Button>
-                </div>
-              </li>
-            ))}
+                  <span className="reading hidden text-xs text-ink-soft md:block">
+                    {dataset.createdAt.slice(0, 10)}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href={`/datasets/${dataset.id}`}
+                      className="rounded border border-grid px-3 py-1.5 text-xs text-ink transition-colors hover:border-ink-soft hover:bg-paper"
+                    >
+                      管理文档
+                    </Link>
+                    <Button
+                      variant="danger"
+                      onClick={() => {
+                        if (window.confirm(`确定删除知识库「${dataset.name}」吗？`)) {
+                          void datasetsApi.remove(dataset.id).then(load);
+                        }
+                      }}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
-      </section>
+      </Panel>
     </PageContainer>
   );
 }

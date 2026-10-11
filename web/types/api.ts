@@ -207,7 +207,7 @@ export interface DatasetListResult {
  * 文档处理状态。
  * pending/indexing 期间前端需要轮询，ready 才可检索，failed 要看 errorMessage。
  */
-export type DocumentStatus = "pending" | "indexing" | "ready" | "failed";
+export type DocumentStatus = "pending" | "parsing" | "draft" | "indexing" | "ready" | "failed";
 
 export interface DocumentInfo {
   id: number;
@@ -215,7 +215,13 @@ export interface DocumentInfo {
   name: string;
   fileSize: number;
   status: DocumentStatus;
+  /** 解析出的正文字符数（清洗前） */
+  charCount: number;
+  /** 最终采用的分段模式；未入库时为空 */
+  chunkMode: string;
   segmentCount: number;
+  /** 解析产物是否就绪（决定能否进分段工作台预览） */
+  parsed: boolean;
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
@@ -230,7 +236,13 @@ export interface DocumentListResult {
 
 export interface SegmentInfo {
   id: number;
+  /** 片段主键（与向量库对应），引用留痕与按片段复查都用它 */
+  chunkId: string;
   chunkIndex: number;
+  /** 片段字符数（不含标题面包屑） */
+  charCount: number;
+  /** 开头与前一片段重叠的字符数 */
+  overlapRunes: number;
   content: string;
   tokenCount: number;
   page: number;
@@ -311,4 +323,123 @@ export interface ChatDonePayload {
 
 export interface ChatErrorPayload {
   message: string;
+}
+
+/*
+ * 分段工作台契约。
+ * 对应后端 handler/chunkworkbench.go，字段名与 JSON 标签一一对应。
+ */
+
+/** 分段模式。parent_child 目前是占位（后端会拒绝提交）。 */
+export type ChunkMode = "title" | "length" | "separator" | "parent_child";
+
+export interface ChunkModeOption {
+  mode: ChunkMode;
+  label: string;
+  description: string;
+  implemented: boolean;
+}
+
+export interface CleaningRuleInfo {
+  key: string;
+  label: string;
+  description: string;
+  /** 需要在界面上填正则 */
+  needsPattern?: boolean;
+  /** high 表示容易误删，界面会额外提醒 */
+  risk?: string;
+}
+
+export interface CleaningRuleConfig {
+  key: string;
+  pattern?: string;
+}
+
+/** 分段与清洗配置。 */
+export interface ChunkConfig {
+  mode: ChunkMode;
+  separator: string;
+  maxRunes: number;
+  overlapRunes: number;
+  minRunes: number;
+  keepNoise: boolean;
+  cleaning: CleaningRuleConfig[];
+  /** 配置指纹（后端计算），用于识别「这批片段是哪套参数切的」 */
+  version?: string;
+}
+
+export interface ChunkLimits {
+  minMaxRunes: number;
+  maxMaxRunes: number;
+  maxMinRunes: number;
+  defaultMaxRunes: number;
+  defaultMinRunes: number;
+  maxOverlapPercent: number;
+}
+
+export interface ChunkOptions {
+  modes: ChunkModeOption[];
+  cleaningRules: CleaningRuleInfo[];
+  defaults: ChunkConfig;
+  limits: ChunkLimits;
+}
+
+/** 单条清洗规则的执行结果。 */
+export interface CleaningRuleResult {
+  key: string;
+  label: string;
+  hits: number;
+  removedRunes: number;
+  note?: string;
+  /** 被删除内容的样本，界面据此判断规则是否误伤 */
+  samples?: string[];
+}
+
+export interface PreviewChunk {
+  index: number;
+  kind: string;
+  titlePath: string[];
+  page: number;
+  locator: string;
+  charCount: number;
+  overlapRunes: number;
+  /** 最终内容（含标题面包屑） */
+  content: string;
+  /** 清洗前的内容，用于对比 */
+  originalText: string;
+}
+
+export interface ChunkStats {
+  total: number;
+  totalRunes: number;
+  avgRunes: number;
+  maxChunkRunes: number;
+  atLimit: number;
+  tooShort: number;
+  tables: number;
+  overlapRunes: number;
+  droppedNoise: number;
+}
+
+export interface PreviewResult {
+  chunks: PreviewChunk[];
+  total: number;
+  returned: number;
+  cleaning: CleaningRuleResult[];
+  cleaningStats: { removedRunes: number; beforeRunes: number; afterRunes: number };
+  stats: ChunkStats;
+  /** 可直接执行的建议（例如「8 个片段贴着上限被切开」） */
+  hints: string[];
+  configVersion: string;
+  meta: { parser: string; parseMode: string; pageCount: number; sourceName: string };
+}
+
+/** 知识库级检索配置。 */
+export interface RetrievalConfig {
+  topK: number;
+  candidateTopK: number;
+  scoreThreshold: number;
+  rerank: boolean;
+  vectorWeight: number;
+  keywordWeight: number;
 }

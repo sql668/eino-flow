@@ -5,45 +5,43 @@ import { useEffect } from "react";
 
 import { PageContainer } from "@/components/layout/page-container";
 import { HealthCheck } from "@/components/health-check";
+import { Panel } from "@/components/ui/field";
 import { useModelConfigStore } from "@/stores/model-config-store";
 
-// 主页。
-// 结构参考 Dify 首页：问候语 + 分组标题 + 卡片网格；
-// 骨架阶段的卡片指向已落地的页面，未开发的入口标注「待开发」而不是给一个死链接。
+// 主页 = 控制台总览。
+//
+// 设计取向：这一页不摆入口卡片墙，而是当成**仪表盘**——先给三条关键读数
+// （当前向量模型 / 重排服务 / 系统就绪），再列可进入的功能。
+// 对工程师来说「现在系统在用什么模型、服务是否就绪」比「有哪些功能」更重要。
 
-interface EntryCard {
+interface Entry {
   href: string;
   title: string;
-  meta: string;
   description: string;
   pending?: boolean;
 }
 
-const entries: EntryCard[] = [
-  {
-    href: "/settings/models",
-    title: "模型配置",
-    meta: "已完成",
-    description: "配置厂商凭证、添加模型、设置全局默认与连通性测试。",
-  },
+const entries: Entry[] = [
   {
     href: "/datasets",
     title: "知识库",
-    meta: "接口已完成，页面待开发",
-    description: "上传文档 → 解析切分 → 向量化入库 → 检索溯源。",
-    pending: true,
+    description: "上传 → 解析 → 确认分段与清洗 → 入库 → 可检索（支持两阶段重排与引用溯源）",
   },
   {
     href: "/apps",
     title: "应用与对话调试",
-    meta: "待开发",
-    description: "创建应用、ReAct / RAG 问答与流式对话（V0.1 收尾）。",
-    pending: true,
+    description: "创建应用，用知识库问答验证检索效果，回答带来源引用",
+  },
+  {
+    href: "/settings/models",
+    title: "模型配置",
+    description: "厂商凭证、模型清单、全局默认与连通性测试",
   },
 ];
 
 export default function HomePage() {
   const effective = useModelConfigStore((state) => state.effective);
+  const effectiveRerank = useModelConfigStore((state) => state.effectiveRerank);
   const loadAll = useModelConfigStore((state) => state.loadAll);
 
   useEffect(() => {
@@ -51,81 +49,102 @@ export default function HomePage() {
   }, [loadAll]);
 
   return (
-    <PageContainer className="flex flex-col gap-6 px-8 py-7">
+    <PageContainer className="flex flex-col gap-5 px-8 py-7">
       <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold tracking-tight">欢迎回来 👋</h1>
-        <p className="text-sm text-neutral-600">
-          基于 CloudWeGo Eino 内核的低代码 AI 工作流 / 智能体平台。
+        <span className="eyebrow">控制台</span>
+        <h1 className="text-[22px] font-semibold tracking-tight text-ink">
+          EinoFlow · AI 工作流控制台
+        </h1>
+        <p className="max-w-2xl text-sm leading-6 text-ink-muted">
+          基于 CloudWeGo Eino 的编排内核，Go 后端 + Next.js 前端。下面是当前实际生效的读数。
         </p>
       </header>
 
-      <section className="flex flex-wrap items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3">
-        <span className="text-xs font-medium text-neutral-500">当前向量模型</span>
-        <span className="text-sm font-semibold text-neutral-900">
-          {effective?.modelName || "未配置"}
-        </span>
-        <span className="text-xs text-neutral-500">
-          {effective?.fromConfig ? "（来自配置文件兜底）" : effective?.providerName || ""}
-        </span>
-        <div className="ml-auto">
+      <Panel eyebrow="运行读数" title="当前生效的模型与服务">
+        <dl className="grid grid-cols-2 divide-grid sm:grid-cols-3 sm:divide-x">
+          <Reading
+            label="向量模型"
+            value={effective?.modelName || "未配置"}
+            note={effective?.fromConfig ? "来自配置文件兜底" : effective?.providerName || "—"}
+          />
+          <Reading
+            label="重排模型"
+            value={effectiveRerank?.modelName || "未启用"}
+            note={effectiveRerank ? effectiveRerank.providerName : "检索将按向量顺序返回"}
+          />
+          <Reading
+            label="对话模型"
+            value={
+              useModelConfigStore.getState().effectiveLLM?.modelName || "未配置"
+            }
+            note="知识库问答用"
+          />
+        </dl>
+        <div className="mt-3 flex items-center gap-3 border-t border-grid-soft pt-3">
+          <span className="eyebrow !text-ink-soft">后端连通性</span>
           <HealthCheck />
         </div>
-      </section>
+      </Panel>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-medium text-neutral-500">功能入口</h2>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      <Panel eyebrow="入口" title="可以做什么" reading={`${entries.length} 项`}>
+        <ul className="divide-y divide-grid-soft">
           {entries.map((entry) => {
             const body = (
               <>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-neutral-900">{entry.title}</span>
-                  <span
-                    className={`rounded px-1.5 py-0.5 text-[11px] ${
-                      entry.pending
-                        ? "bg-neutral-100 text-neutral-500"
-                        : "bg-emerald-50 text-emerald-700"
-                    }`}
-                  >
-                    {entry.meta}
+                <span className="w-6 shrink-0 text-ink-soft" aria-hidden="true">
+                  →
+                </span>
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="flex items-center gap-2 text-sm font-medium text-ink">
+                    {entry.title}
+                    {entry.pending ? (
+                      <span className="rounded-sm bg-grid-soft px-1 py-0.5 text-[10px] text-ink-muted">
+                        待开发
+                      </span>
+                    ) : null}
                   </span>
-                </div>
-                <p className="mt-2 text-xs leading-5 text-neutral-600">{entry.description}</p>
+                  <span className="text-xs leading-5 text-ink-muted">{entry.description}</span>
+                </span>
               </>
             );
 
             if (entry.pending) {
               return (
-                <div
-                  key={entry.href}
-                  className="cursor-not-allowed rounded-xl border border-neutral-200 bg-white px-4 py-4 opacity-60"
-                  title="该页面尚未开发，可先用后端接口验证"
-                >
+                <li key={entry.href} className="flex cursor-not-allowed gap-3 py-3 opacity-55">
                   {body}
-                </div>
+                </li>
               );
             }
             return (
-              <Link
-                key={entry.href}
-                href={entry.href}
-                className="rounded-xl border border-neutral-200 bg-white px-4 py-4 transition-colors hover:border-neutral-400"
-              >
-                {body}
-              </Link>
+              <li key={entry.href}>
+                <Link
+                  href={entry.href}
+                  className="flex items-start gap-3 py-3 transition-colors hover:bg-paper"
+                >
+                  {body}
+                </Link>
+              </li>
             );
           })}
-        </div>
-      </section>
+        </ul>
+      </Panel>
 
-      <section className="flex flex-col gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-4">
-        <h2 className="text-sm font-medium text-neutral-900">当前阶段</h2>
-        <p className="text-xs leading-6 text-neutral-600">
-          V0.1 极速 Demo：模型配置与 RAG 检索链路（含重排）已跑通；
-          接下来是 Eino 内核接入与流式对话。模块完成情况见{" "}
-          <span className="font-medium text-neutral-800">docs/PROGRESS.md</span>。
-        </p>
-      </section>
+      <p className="text-xs leading-5 text-ink-soft">
+        模块完成情况与未完成项见 docs/PROGRESS.md；规则见 AGENTS.md（含「开工前先对齐」与视觉方向）。
+      </p>
     </PageContainer>
+  );
+}
+
+/** Reading 是仪表读数：大号等宽数字 + 说明，全站读数统一用这个形态。 */
+function Reading({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <div className="flex flex-col gap-0.5 px-3 py-2 first:pl-0">
+      <dt className="eyebrow !text-ink-soft">{label}</dt>
+      <dd className="reading truncate text-[15px] font-semibold text-ink" title={value}>
+        {value}
+      </dd>
+      {note ? <span className="text-[10px] text-ink-soft">{note}</span> : null}
+    </div>
   );
 }

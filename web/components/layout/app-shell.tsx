@@ -6,16 +6,17 @@ import type { ReactNode } from "react";
 
 // 控制台外壳：左侧导航 + 主内容区。
 //
-// 结构对齐 Dify（本机 http://localhost 的界面）：顶部品牌 + 导航列表 + 分组标题 +
-// 底部用户行，主内容区独立滚动。之所以先搭外壳而不是逐页加样式：
-// 后面还有应用列表、知识库、对话调试等页面，导航必须只有一个来源。
+// 视觉方向（见 web/AGENTS.md「视觉方向」）：工程图纸 + 仪表读数。
+//   - 左侧是「墨」：深墨底、纸色字，和右侧的纸底形成明确分区；
+//     控制台里导航长期占位，压深一点能让内容区的读数更醒目。
+//   - 主内容区铺一层极淡的图纸网格，给整页定调（背景材质，不是装饰图案）。
+//   - 当前项用一条竖向蓝图蓝标记，而不是整块高亮：标记比填充更克制，
+//     也和「读数用色节制」的原则一致。
 
 interface NavItem {
   href: string;
   label: string;
   icon: ReactNode;
-  /** 右侧小标签，例如 Dify 的 BETA */
-  badge?: string;
   /** 尚未实现的入口：置灰并给出说明，避免点进去是空页面 */
   pending?: boolean;
 }
@@ -63,27 +64,33 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
 
   return (
-    // h-full + overflow-hidden：外壳自身不滚动，滚动交给内部明确指定的区域。
-    // 侧栏只在内容超高时滚动（导航项多了才会），主内容区由页面各自决定。
-    <div className="flex h-full overflow-hidden bg-neutral-50 text-neutral-900">
-      <aside className="flex w-[228px] shrink-0 flex-col overflow-y-auto border-r border-neutral-200 bg-white">
-        <div className="flex h-14 items-center px-5">
-          <Link href="/" className="text-lg font-semibold tracking-tight">
+    <div className="flex h-full overflow-hidden">
+      <aside className="flex w-[216px] shrink-0 flex-col overflow-y-auto bg-ink text-white/70">
+        <div className="flex h-14 items-center gap-2 px-5">
+          <span className="h-2 w-2 rounded-sm bg-pri" aria-hidden="true" />
+          <Link href="/" className="text-[15px] font-semibold tracking-tight text-white">
             EinoFlow
           </Link>
         </div>
 
-        <nav className="flex flex-1 flex-col gap-0.5 px-3 py-2">
+        <span className="eyebrow px-5 pb-2 !text-white/35">导航</span>
+
+        <nav className="flex flex-1 flex-col gap-0.5 px-2.5">
           {navItems.map((item) => {
             const active =
               item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
             const className = [
-              "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
-              active
-                ? "bg-neutral-100 font-medium text-neutral-900"
-                : "text-neutral-600 hover:bg-neutral-50",
-              item.pending ? "cursor-not-allowed opacity-50" : "",
+              "relative flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] transition-colors",
+              active ? "bg-white/8 text-white" : "hover:bg-white/5 hover:text-white/90",
+              item.pending ? "cursor-not-allowed opacity-45" : "",
             ].join(" ");
+
+            const marker = active ? (
+              <span
+                className="absolute -left-2.5 top-1.5 h-[18px] w-[2px] bg-pri"
+                aria-hidden="true"
+              />
+            ) : null;
 
             if (item.pending) {
               return (
@@ -94,7 +101,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 >
                   {item.icon}
                   {item.label}
-                  <span className="ml-auto rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500">
+                  <span className="ml-auto rounded-sm bg-white/10 px-1 py-0.5 text-[10px] text-white/50">
                     待开发
                   </span>
                 </span>
@@ -102,6 +109,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             }
             return (
               <Link key={item.href} href={item.href} className={className}>
+                {marker}
                 {item.icon}
                 {item.label}
               </Link>
@@ -109,12 +117,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           })}
         </nav>
 
-        <div className="border-t border-neutral-200 px-4 py-3 text-xs text-neutral-500">
-          V0.1 · 本地开发
+        <div className="border-t border-white/10 px-5 py-3">
+          <span className="reading text-[11px] text-white/40">V0.1 · 本地开发</span>
         </div>
       </aside>
 
-      <main className="flex min-h-0 min-w-0 flex-1 overflow-hidden">{children}</main>
+      <main className="blueprint-grid flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {children}
+      </main>
     </div>
   );
 }

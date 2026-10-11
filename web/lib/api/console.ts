@@ -1,6 +1,10 @@
 import { http, streamSse, uploadFile } from "@/lib/http";
 import type {
   AppInfo,
+  ChunkConfig,
+  ChunkOptions,
+  PreviewResult,
+  RetrievalConfig,
   AppListResult,
   AppMode,
   ChatCitationsPayload,
@@ -53,6 +57,37 @@ export const datasetsApi = {
 };
 
 // ---------- 文档 ----------
+
+export interface IngestPayload {
+  config: ChunkConfig;
+  /** 把这份配置写回知识库默认，下次上传自动带出来 */
+  saveAsDefault?: boolean;
+}
+
+export const chunkApi = {
+  /** 分段选项：模式、清洗规则、默认配置、取值边界 */
+  options: (datasetId: number) =>
+    http.get<ChunkOptions>(`/api/v1/datasets/${datasetId}/chunk-options`),
+  getChunkConfig: (datasetId: number) =>
+    http.get<ChunkConfig>(`/api/v1/datasets/${datasetId}/chunk-config`),
+  saveChunkConfig: (datasetId: number, config: ChunkConfig) =>
+    http.put<ChunkConfig>(`/api/v1/datasets/${datasetId}/chunk-config`, { config }),
+  getRetrievalConfig: (datasetId: number) =>
+    http.get<RetrievalConfig>(`/api/v1/datasets/${datasetId}/retrieval-config`),
+  saveRetrievalConfig: (datasetId: number, config: RetrievalConfig) =>
+    http.put<RetrievalConfig>(`/api/v1/datasets/${datasetId}/retrieval-config`, config),
+
+  /** 预览分段结果：不写库，可以反复调参 */
+  preview: (documentId: number, config: ChunkConfig) =>
+    http.post<PreviewResult>(`/api/v1/documents/${documentId}/preview`, { config }),
+  /** 按配置入库（异步，202 后轮询文档状态） */
+  ingest: (documentId: number, payload: IngestPayload) =>
+    http.post<null>(`/api/v1/documents/${documentId}/ingest`, payload),
+  /** 用知识库默认配置重切 */
+  rechunk: (documentId: number) => http.post<null>(`/api/v1/documents/${documentId}/rechunk`),
+  /** 重新解析（旧文档没有解析产物，或解析失败时用） */
+  reparse: (documentId: number) => http.post<null>(`/api/v1/documents/${documentId}/parse`),
+};
 
 export const documentsApi = {
   list: (datasetId: number, page = 1, pageSize = 50) =>
