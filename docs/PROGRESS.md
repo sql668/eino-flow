@@ -100,6 +100,7 @@ RAG 全链路（解析 → 切片 → 向量化 → 两阶段检索 → 溯源�
 | 两阶段检索 | ✅ | `engine/rag/retriever.go` | 召回 candidateTopK → 重排 → 取 topK；可逐请求开关；不静默降级 |
 | 两阶段留痕 | ✅ | `retrieval_runs` / `retrieval_hits` | vector 阶段记全部候选、rerank 阶段记最终结果与两个分数 |
 | 模型配置页（前端） | ✅ | `web/app/(console)/settings/models` | 对齐 Dify「模型供应商」：已配置 / 待配置 / 显示模型折叠区；对话模型也可设默认并如实显示 |
+| 前端视觉方向 | ✅ | `web/AGENTS.md` 第 4 节 · `tailwind.config.ts` · `components/ui` | 工程图纸 + 仪表读数：墨/纸/网格/蓝图蓝 + 读数色；Geist Mono 只给读数；Panel 头部挂真实读数；共享 `Reading` 组件 |
 | 控制台外壳（前端） | ✅ | `web/components/layout` | 全局导航 + 设置二级导航，三栏结构对齐 Dify；**只有内容区滚动**（见 web/AGENTS.md 第 4 节） |
 | **LLM 调用** | ⬜ | — | 厂商已声明 llm 能力，实现随 SSE 对话一起落地 |
 | **Eino 内核接入** | ⬜ | `internal/engine` | **当前 RAG 直连 MinerU / Ollama，尚未经过 Eino 编排** |
