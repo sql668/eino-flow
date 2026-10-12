@@ -99,8 +99,8 @@ printf 'EINOFLOW_SECRET_KEY=%s\n' "$(openssl rand -base64 32)" >> .env
 - 全部由根目录 `docker-compose.yml` 编排：`make up` 启动，`make ps` 查看状态，`make milvus-status` 查看 Milvus 侧。
 - 文档解析服务 MinerU 较重（首次需构建镜像，约 1GB），放在 `rag` profile：`make up-rag` 一并启动。
 - 前端 dev 端口固定为 **3001**，因为 3000 已被 Attu 占用。
-- 本机另有一套独立 Milvus 编排（`/Users/shiqingliang/Documents/docker-app/milvus/`），端口重叠，
-  启动本项目前请先在其目录执行 `docker compose down`。
+- 如果你本机已有别的 Milvus 编排在用 `19530 / 9091 / 3000` 端口，先到那套编排的目录执行
+  `docker compose down`，再启动本项目。
 
 ## 公网演示
 

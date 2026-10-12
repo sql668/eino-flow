@@ -139,7 +139,8 @@ go test ./...
 
 ## 9. 参考实现：本地 Dify 后端（只参考设计）
 
-路径：`/Users/shiqingliang/Documents/Projects/PublicProjects/dify/api`（版本 1.17.1，Python/Flask，只读参考）。
+参考源码克隆在**仓库之外**（例如 `../dify`）；下文路径均相对其 `api/` 目录。
+对齐版本 1.17.1（Python/Flask），**只读参考**。
 
 重点参考位置：
 

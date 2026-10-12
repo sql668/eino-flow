@@ -549,7 +549,7 @@ RAG 只依赖「embedding 地址 + 模型名 + 维度」三项信息，先跑通
 ## 8. 参考与约定
 
 - 需求以 `docs/` 下的 PRD 与任务计划书为准；
-- 本地 Dify 源码可作设计参考（`/Users/shiqingliang/Documents/Projects/PublicProjects/dify`），
+- 本地 Dify 源码（克隆在仓库外，例如 `../dify`）可作设计参考，
   **禁止直接复制代码**，理由与许可证说明见根 `AGENTS.md` 第 11 节；
 - 解析样本在 `docs/rag-test/`（其中含个人简历，注意个人信息）；
 - 后端细节规则见 `backend/AGENTS.md`，前端见 `web/AGENTS.md`。

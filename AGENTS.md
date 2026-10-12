@@ -44,8 +44,9 @@ EinoFlow：类 Dify 的低代码 AI 工作流 / 智能体平台。基于字节 C
 - 使用异步任务模型：`POST /v1/uploads` → `PUT .../content` → `POST .../complete` → `POST /v1/parse/jobs` → 轮询 `GET /v1/parse/jobs/{id}`。
 - 消费的产物是 **`middle_json`**（`schema=docvortex.middle`），必须显式放进 `output_formats`——它默认只返回 markdown。
 - 解析结果映射进本项目自己的 IR（`internal/engine/rag/loader`），**不要让切片逻辑直接依赖 MinerU 的字段**，否则换解析器要动全身。
-- 本机另有一套独立的 Milvus 编排（`/Users/shiqingliang/Documents/docker-app/milvus/`），与本项目端口冲突，
-  启动前需先 `docker compose -f 该路径/docker-compose.yml down`；本项目不再依赖它。
+- 如果本机已经有另一套自己的 Milvus 编排（放在仓库外的某个目录），它会与本项目抢占
+  `19530 / 9091 / 3000` 端口：启动本项目前，先到那套编排的目录执行 `docker compose down`。
+  本项目不依赖任何外部 Milvus 编排。
 
 需要引入上表以外的框架 / 中间件时，先说明理由并征得确认，不要默认加依赖。
 
@@ -100,6 +101,8 @@ DSL 序列化与反序列化、SSE 流式渲染、日志实时展示、插件市
 - **提交**：小步提交，信息格式 `<type>: <简述>`，一提交只做一件事。
 - **提交前自检**：格式化 + lint + 类型检查 + 相关测试必须通过，不允许带病提交。
 - **密钥安全**：密钥、Token、连接串一律走环境变量 / 配置文件，禁止写入仓库。
+- **公开仓库规范**：本仓库对外公开——文档、注释、示例里**不写本机绝对路径**（用相对路径或
+  `<占位>` 写法）、不写个人信息、不放内部资料；引用第三方源码一律说"克隆到仓库外"，不写具体机器路径。
 - **可运行**：每个阶段的产出必须可本地部署、可演示，不做只能编译不能跑的半成品。
 - **文档同步**：改动架构、协议、目录约定时，同步更新对应 `AGENTS.md` 或 `docs/`。
 
@@ -157,7 +160,8 @@ DSL 序列化与反序列化、SSE 流式渲染、日志实时展示、插件市
 
 ## 12. 参考项目：本地 Dify 源码（只参考设计，不照搬代码）
 
-路径：`/Users/shiqingliang/Documents/Projects/PublicProjects/dify`（当前版本 1.17.1，Python/Flask + Next.js）。
+参考源码克隆在**仓库之外**（例如与本项目平级的 `../dify`），本文以 **1.17.1**（Python/Flask + Next.js）
+为对齐版本；换版本时以实际代码为准。
 
 Dify 与本项目功能高度重合，可作为**设计参考**：借鉴模块划分、接口边界、数据模型与交互流程。
 但技术栈不同（Python → Go），**禁止直接复制代码**，必须用本项目技术栈重新实现。

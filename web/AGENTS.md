@@ -154,7 +154,7 @@ pnpm build
 
 ## 9. 参考实现（本地 Dify 前端）
 
-路径：`/Users/shiqingliang/Documents/Projects/PublicProjects/dify/web`（只读参考）。
+参考源码克隆在**仓库之外**（例如 `../dify`）；下文路径均相对其 `web/` 目录。**只读参考**。
 
 重点参考：`app/components/workflow/`（画布、节点、`hooks-store` 状态组织）、`service/`（请求层划分）、`context/`、`features/`。
 

@@ -1,14 +1,13 @@
 # EinoFlow 本地依赖编排（一套命令拉起全部中间件）。
 #
-# 参考并整合了本地 Milvus 编排：
-#   /Users/shiqingliang/Documents/docker-app/milvus/docker-compose.yml
+# 参考并整合了社区常见的 Milvus 编排写法（镜像 tag 与端口沿用本项目约定）。
 #
 # 服务：PostgreSQL / Redis / MinIO / etcd / Milvus / Attu
 #   - MinIO 由业务对象存储与 Milvus 后端存储共用：业务用 bucket `einoflow`，Milvus 用 bucket `milvus`。
 #   - Attu 使用 3000 端口，因此前端 dev 固定跑 3001（见 web/package.json）。
 #
-# ⚠️ 启动前请先停掉那套独立的 Milvus 栈，否则 19530 / 9091 / 3000 端口会冲突：
-#   docker compose -f /Users/shiqingliang/Documents/docker-app/milvus/docker-compose.yml down
+# ⚠️ 若本机已有别的 Milvus 栈在跑，先停掉它，否则 19530 / 9091 / 3000 端口会冲突：
+#   cd <那套编排所在目录> && docker compose down
 #
 # 镜像 tag 均选用本机已有镜像，避免重复下载。
 
