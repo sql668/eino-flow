@@ -1,0 +1,59 @@
+schema: spec-driven
+
+context: |
+  Language: 中文（简体）
+  All artifacts must be written in 中文（简体）.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+
+  项目：EinoFlow —— 类 Dify 的低代码 AI 工作流 / 智能体平台。
+  技术栈（不可替换）：Go 1.25 + CloudWeGo Hertz + Eino；Next.js 14 App Router + React 18 +
+  TypeScript 严格模式 + @xyflow/react + Zustand + TailwindCSS/shadcn；PostgreSQL / Milvus /
+  MinIO / Redis；可观测走 OpenTelemetry + Eino Callback。
+
+  硬性约束（写规格与任务时必须遵守）：
+  - 前端不写任何 AI 执行逻辑，模型调用 / 检索 / 向量 / 编排 / 工具执行一律在后端；
+  - 工作流必须走「前端 DSL → 后端解析 → 动态 Eino Graph」，不得绕过；
+  - 后端分层：handler → service → engine → repository，只能自上而下依赖；
+  - 配置持久化到 PostgreSQL，禁止硬编码；密钥只走环境变量，禁止入库；
+  - 类型优先：禁止用 any / interface{} / map[string]any 承载业务数据；
+  - 注释一律中文，解释「为什么」；
+  - 严格按阶段推进（V0.1 极速 Demo / V1.0 对标 Dify / V2.0 差异化），不提前开发高阶功能。
+
+  流程约束：任何新任务先出方案、列出不确定项、等用户确认后再写代码（见根 AGENTS.md 第 11 节）。
+
+  文档分工：本目录（openspec/specs 与 openspec/changes）管行为契约与变更意图；
+  docs/PROGRESS.md 管实现进度、技术决策与技术债（引用 change-id，不复制内容）；
+  根 AGENTS.md、web/AGENTS.md、backend/AGENTS.md 管长期规则。
+
+  验证要求：后端改动跑 make backend-check（gofmt + go vet + build + test），
+  前端改动跑 make web-check（lint + 类型检查 + build）；
+  需要真实依赖的集成测试用 ./scripts/einoflow.sh start 起本地依赖，并设 EINOFLOW_TEST_PG_DSN。
+
+  规格写作约定：
+  - capability 用 kebab-case，按业务域命名（knowledge-base、rag-pipeline、rag-retrieval、
+    model-config、chat-conversation；后续新增能力沿用 flat 结构，不再加层级）；
+  - 规格描述可观察行为，不写类名 / 函数名 / 表名等实现细节；
+  - 一条 Requirement 只写一个行为（描述 ≤500 字符），边界情况放进 Scenario；
+  - 任务写成可勾选框、自带验证方式，测试与文档跟着各自任务组走。
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always state what is out of scope
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
