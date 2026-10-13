@@ -123,16 +123,20 @@ openspec/
 | `model-config` | 厂商凭证、模型清单、三级绑定、凭证加密与掩码、连通性测试 |
 | `chat-conversation` | 流式对话的四类事件、引用来源、思考过程展示、会话与消息落库 |
 
-### 5.2 首批 change 草案（V0.1 收尾三件事）
+### 5.2 change 清单与状态
 
-| change-id | 对应 PROGRESS 未完成项 |
-| --- | --- |
-| `add-react-agent-chat` | 第 4 节 #3：ReAct / 智能体问答（V0.1 目标「ReAct/RAG 问答」的另一半） |
-| `add-retrieval-trace-console` | 第 4 节 #2：检索追踪 / 召回测试页面（后端留痕数据已就绪） |
-| `add-chat-tests` | 第 4 节 #10：对话链路单测（其他模块都有，只有 `service/chat.go` 与 Eino RAG chain 没有） |
-| `add-dictionary-keyword-tokenizer` | 技术债 17：关键词抽取改走词典分词（gse），保留后置过滤与可回退配置 |
+| change-id | 对应 PROGRESS 未完成项 | 状态（2026-10-13） |
+| --- | --- | --- |
+| `add-react-agent-chat` | 第 4 节 #3：ReAct / 智能体问答（V0.1 目标「ReAct/RAG 问答」的另一半） | 🚧 2/28（工具注册表 + 计算演示工具已落地） |
+| `add-retrieval-trace-console` | 第 4 节 #2：检索追踪 / 召回测试页面（后端留痕数据已就绪） | ⬜ 0/17 已批准未开工 |
+| `add-chat-tests` | 第 4 节 #10：对话链路单测（其他模块都有，只有 `service/chat.go` 与 Eino RAG chain 没有） | ✅ 已归档（`archive/2026-10-12-add-chat-tests/`） |
+| `add-dictionary-keyword-tokenizer` | 技术债 17：关键词抽取改走词典分词（gse），保留后置过滤与可回退配置 | ⬜ 0/13 已批准未开工 |
 
-三个 change 目前都是**提案状态**，一个都还没 apply。按流程：读 proposal → 你点头 → 才动手。
+进度随时用 `openspec list` 查；某个 change 的下一批任务用
+`openspec instructions apply --change <id> --json` 看。
+
+**当前进度与下一步统一记在 `docs/PROGRESS.md` 第 9.7 节**（避免两处各写一份而漂移）。
+按流程：读 proposal → 用户点头 → 才动手；2026-10-12 起这几个 change 已获批准，可连续实施。
 
 ## 6. 与其他文档的分工
 

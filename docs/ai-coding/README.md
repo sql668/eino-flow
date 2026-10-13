@@ -118,7 +118,7 @@ codex plugin list                  # 已装插件与市场
 | `openspec/` 骨架 | ✅ 已初始化 | `openspec init --tools codex --language 中文（简体）`，项目语言设为简体中文 |
 | Codex 侧技能 | ✅ 12 个 | 生成在 `.agents/skills/openspec-*/SKILL.md`（Codex 认 skills，不认 `/openspec-*` 命令）；核心 6 + 扩展 6 |
 | 首批 capability 规格 | ✅ 5 个 | `knowledge-base` / `rag-pipeline` / `rag-retrieval` / `model-config` / `chat-conversation`，见 openspec.md 第 5 节 |
-| 首批 change 草案 | ✅ 3 个 | `add-react-agent-chat` / `add-retrieval-trace-console` / `add-chat-tests`（V0.1 收尾三件事） |
+| change 清单 | ✅ 4 个 | `add-react-agent-chat`（🚧 2/28）/ `add-retrieval-trace-console`（⬜）/ `add-dictionary-keyword-tokenizer`（⬜）/ `add-chat-tests`（✅ 已归档）。状态见 `docs/PROGRESS.md` 第 9.7 节 |
 | Superpowers | ✅ 7.0.0（插件 `superpowers@superpowers-dev`） | 见 superpowers.md；本机用本地市场安装，官方 curated 市场当前是 6.3.0 |
 | 扩展工作流 | ✅ 已启用（2026-10-12） | 全局 `profile: custom` + 12 个工作流；新增 6 个技能 `new / continue / ff / verify / bulk-archive / onboard` |
 
@@ -126,7 +126,9 @@ codex plugin list                  # 已装插件与市场
 
 1. **不要为了「补全」而批量回填规格。** OpenSpec 官方明确建议按变更逐步长成；
    本项目回填的 5 个 capability 都是「下一批变更要动的区域」，不是全仓库清点。
-2. **`openspec/` 要进版本管理**（规格是契约，要跟着代码走），而 `docs/`、`AGENTS.md`
-   目前仍是本地文件（`.gitignore` 里明确写了）。两者策略不同是刻意的，别顺手把 openspec 也忽略掉。
+2. **版本管理范围是明确的**（2026-10-12 定稿）：`openspec/`、`.agents/`、`docs/` 与三层
+   `AGENTS.md` 都进库；`docs/rag-test/`、`testdata/`、`.env` 继续忽略。
+   别顺手放宽忽略规则——**被忽略的文件在 `git status` 里根本不显示**，
+   容易长期"以为提交了"（`web/AGENTS.md` 与 `backend/AGENTS.md` 就这样被漏掉过整整一轮）。
 3. **Specs 描述行为，不描述实现。** 类名、函数名、表名不进 `spec.md`；
    能被实现替换而不改变外部行为的细节，都不属于规格。

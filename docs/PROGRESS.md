@@ -9,9 +9,9 @@
 > - 发现限制或债务，追加到第 6 节，不要口头说说过就算；
 > - 状态标记：✅ 完成 · 🚧 进行中 · ⬜ 未开始 · ⏸️ 挂起（附原因）。
 
-最后更新：2026-10-12（AI Coding 工作方式落地：OpenSpec 初始化 + 5 个能力规格 + 3 个 change 草案、
-superpowers 插件安装；细则见 `docs/ai-coding/`，本次补记见第 9.6 节。
-**下次接手先看第 9 节「会话交接」**）
+最后更新：2026-10-13（`add-chat-tests` 已归档；`add-react-agent-chat` 开工 2/28，
+发现"模型层需要工具调用能力"这个计划外前提，已补进 change。
+**下次接手先看第 9.7 节**）
 
 ## 1. 当前阶段
 
@@ -49,7 +49,7 @@ V0.1 还差两件事（详见第 4 节与第 9 节）：
 | --- | --- | --- | --- |
 | 项目规则 | ✅ | `AGENTS.md` · `web/AGENTS.md` · `backend/AGENTS.md` | 三层规则就近生效 |
 | AI Coding 流程 | ✅ | `docs/ai-coding/` · 根 `AGENTS.md` 第 13 节 | harness / OpenSpec / Superpowers 三层分工、端到端流水线、每步门禁 |
-| 规格与变更（OpenSpec） | ✅ | `openspec/` | CLI 1.14.1；5 个 capability 规格 + **4 个** change 草案；Codex 侧技能在 `.agents/skills/`（12 个：核心 6 + 扩展 6） |
+| 规格与变更（OpenSpec） | ✅ | `openspec/` | CLI 1.14.1；5 个 capability 规格；4 个 change（1 个已归档、1 个进行中、2 个待开工，见第 9.7 节）；Codex 侧技能在 `.agents/skills/`（12 个：核心 6 + 扩展 6） |
 | 执行方法论（Superpowers） | ✅ | Codex 插件 `superpowers@superpowers-dev` 7.0.0 | brainstorm / TDD / 计划 / 复查 / worktree；**不落项目文件** |
 | 一键启停脚本 | ✅ | `scripts/einoflow.sh` | start / stop / restart / status / logs / tunnel |
 | 本地依赖编排 | ✅ | `docker-compose.yml` | PostgreSQL · Redis · MinIO · etcd · Milvus · Attu ·（rag profile）MinerU |
@@ -120,8 +120,9 @@ V0.1 还差两件事（详见第 4 节与第 9 节）：
 | 模型配置页（前端） | ✅ | `web/app/(console)/settings/models` | 对齐 Dify「模型供应商」：已配置 / 待配置 / 显示模型折叠区；对话模型也可设默认并如实显示 |
 | 前端视觉方向 | ✅ | `web/AGENTS.md` 第 4 节 · `tailwind.config.ts` · `components/ui` | 工程图纸 + 仪表读数：墨/纸/网格/蓝图蓝 + 读数色；Geist Mono 只给读数；Panel 头部挂真实读数；共享 `Reading` 组件 |
 | 控制台外壳（前端） | ✅ | `web/components/layout` | 全局导航 + 设置二级导航，三栏结构对齐 Dify；**只有内容区滚动**（见 web/AGENTS.md 第 4 节） |
-| **LLM 调用** | ⬜ | — | 厂商已声明 llm 能力，实现随 SSE 对话一起落地 |
-| **Eino 内核接入** | ⬜ | `internal/engine` | **当前 RAG 直连 MinerU / Ollama，尚未经过 Eino 编排** |
+| **LLM 调用** | ✅ | `engine/model/{ollama,openai}` | 对话链路已按厂商能力实际调用 llm 模型（含 reasoning 思考过程），见第 4 节 #8 |
+| **Eino 内核接入** | 🚧 | `internal/engine` | RAG 问答与流式对话**已经过 Eino Graph**（`engine/chat`）；**智能体（ReAct）与工作流编排未做**，见 change `add-react-agent-chat` |
+| 智能体工具注册 | 🚧 | `engine/runtime` | 工具注册表 + 计算演示工具已落地并测（change `add-react-agent-chat`，2/28）；检索工具、ReAct 运行时、模型工具调用未做 |
 | 流式对话（SSE） | ✅ | `handler/chat.go` · `service/chat.go` · `engine/chat` | 经 Eino Graph 流式转发；四种事件：`citations`（引用，先发）→ `reasoning`（推理模型的思考过程，可选）→ `delta`（回答增量）→ `done`；思考过程不进正文、不落库 |
 | 对话前端（流式渲染） | ✅ | `web/components/chat` | 打字机逐字揭示（`hooks/use-typewriter.ts`）+ 块状光标 + 「思考过程」折叠块 + 钉底滚动（用户上翻时不打扰）+ 尊重系统「减少动效」 |
 | 检索追踪记录 | ⬜ | — | 表结构已设计（见 D6），未开始 |
@@ -644,8 +645,10 @@ RAG 只依赖「embedding 地址 + 模型名 + 维度」三项信息，先跑通
    （删前确认三份文件都带 `<!-- OPENSPEC:START -->` 托管标记；备份在
    `/tmp/openspec-legacy-prompts-backup/`，`/tmp` 会被系统清理）；
 3. **规格与变更**：回填 5 个 capability 规格；写入 3 个 change 草案（`add-react-agent-chat` /
-   `add-retrieval-trace-console` / `add-chat-tests`，对应第 4 节 #3 / #2 / #10）。
-   `openspec validate --all --strict` **8 项全绿**；三个 change 均处于**未实现**状态，等使用者审 proposal；
+   `add-retrieval-trace-console` / `add-chat-tests`，对应第 4 节 #3 / #2 / #10；
+   第 4 个 `add-dictionary-keyword-tokenizer` 见第 7 条）。
+   `openspec validate --all --strict` **8 项全绿**；写入时三个 change 均处于**未实现**状态
+   （当期进度一律以第 9.7 节为准）；
    `add-react-agent-chat` 的四个待确认项已于 2026-10-12 拍板：**工具集含一个无副作用计算工具**、
    **轮次上限可配置（默认 3）**、**工具调用默认展示、可手动关闭**、
    **检索范围沿用现状（一次问答最多一个知识库；工具入参按列表设计留扩展位，多知识库留给 V1.0 的
@@ -679,3 +682,48 @@ RAG 只依赖「embedding 地址 + 模型名 + 维度」三项信息，先跑通
    （用门控分块证明第一段增量早于第二块产出）、检索失败不落助手消息、四种形态的路由行为。
    验证：`make backend-check` 全绿（10.2 秒）；`go test ./internal/...` 全量 **5.7 秒**且不依赖外部服务。
    注：第 6 节技术债表里原本没有对话单测的条目，因此只更新了第 4 节 #10 与阶段表第 5 行。
+
+### 9.7 2026-10-13 交接：`add-react-agent-chat` 进行中（2/28）
+
+**动手前先读这一节。** 三个未完成的 change 及其状态：
+
+| change | 进度 | 状态 |
+| --- | --- | --- |
+| `add-react-agent-chat` | **2/28** | 🚧 进行中（唯一动过代码的 change） |
+| `add-dictionary-keyword-tokenizer` | 0/13 | ⬜ 已批准、未开工 |
+| `add-retrieval-trace-console` | 0/17 | ⬜ 已批准、未开工 |
+| ~~`add-chat-tests`~~ | 16/16 | ✅ 已归档到 `openspec/changes/archive/2026-10-12-add-chat-tests/` |
+
+**已完成的两件事（提交 `8b5b967`）**：
+
+- **工具契约与注册表** `backend/internal/engine/runtime/tool.go`：注册时重名 / 空名 / 取不到工具信息
+  一律报错，注册顺序稳定；契约**直接复用 Eino 的 `tool.InvokableTool`**（ReAct 组件只认这个类型，
+  自造接口等于多一层双向适配，没有收益）；
+- **计算演示工具** `backend/internal/engine/runtime/tools/calculator.go`：四则运算、浮点误差收敛
+  （0.1+0.2 给 `0.3`）、错误信息按"给模型看"写（模型拿到错误文本才能自己纠正）。
+
+**下一步从这里接**（顺序见 `openspec show add-react-agent-chat` 与 tasks.md）：
+
+1. `1.2` 把知识库检索包成工具（复用 `engine/rag` 检索器，含三种检索方式与重排配置）；
+2. `1.3` **按本次问答组装工具集**：未指定知识库就不注册检索工具（不是注册后返回空结果）；
+3. `1.6` 检索范围参数按列表设计、当前只接受一个知识库，多于一个明确报错；
+4. 第 6 组（模型层工具调用）与第 2 组（ReAct 运行时）——前者是后者能真正跑通的前提。
+
+**这一轮撞到的计划外前提（重要）**：Eino 的 ReAct 组件要求模型实现 `ToolCallingChatModel`（`WithTools`），
+而 `engine/model/{ollama,openai}` 只实现了基座接口，ollama 里甚至对 `ToolCalls` 硬报错。
+因此 change 补了 **第 6 组任务（模型层工具调用）**：两条路各自实现（openai 兼容按 `tools` 传参并解析
+`tool_calls`；Ollama 按 `/api/chat` 的 `tools`），流式下要**累积分片的工具调用参数**；
+并且**模型不支持工具时必须明确报错、不静默降级**（已写进 `agent-chat` 规格）。
+任务总数 23 → 28，决策记在 change 的 design **D10**。
+
+**验证方式（都不依赖外部服务，约 10 秒）**：
+
+```bash
+cd backend && go test ./internal/engine/runtime/...   # 工具注册表 + 计算器（本轮新增）
+make backend-check                                     # 全量门禁：格式化 + vet + 构建 + 全部测试
+openspec validate --all --strict                       # 变更与规格的结构校验
+openspec instructions apply --change add-react-agent-chat --json   # 看当前进度与下一批任务
+```
+
+**git 状态**：本轮共 14 个提交，其中 **5 个未 push**（`git log --oneline origin/main..HEAD` 可看）。
+工作区当时只剩两处无害的空行改动，已随文档一起提交。
