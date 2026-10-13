@@ -63,6 +63,27 @@
 TopK 在库间怎么分配、重复片段去重、引用是否带库名都会变成这个 change 的议题，与"ReAct 工具机制"混成一锅。
 **多知识库协同检索留作 V1.0 的独立 change（建议 id：`add-multi-dataset-retrieval`）。**
 
+**D10 模型层需要补「工具调用」能力（实施时发现的计划外前提）**
+
+Eino 的 ReAct 组件（`flow/agent/react`）要求模型实现 `ToolCallingChatModel`，即
+`WithTools([]*schema.ToolInfo) (ToolCallingChatModel, error)`；而本项目的
+`engine/model/ollama` 与 `engine/model/openai` 目前只实现基座接口，**ollama 实现里对
+`ToolCalls` 甚至明确报错**（当时是有意为之：悄悄丢工具调用会让模型答非所问）。
+
+结论：只做"工具注册 + 运行时 + 前端"跑不起来，**模型层必须一并补上工具调用**，否则本 change 无法交付。
+
+- **两条路各自实现**：openai 兼容接口按 OpenAI 规范在请求里带 `tools`、解析响应里的 `tool_calls`；
+  Ollama 按 `/api/chat` 的 `tools` 字段传参、解析其 `tool_calls`。两者响应结构不同，不做统一抽象
+  （统一只会多一层谁也不像的映射）；共同点是**流式下都要累积分片的工具调用参数**（分片到达时是半截 JSON）。
+- **不支持工具时明确报错**，不降级成纯对话：agent 形态悄悄退化成聊天机器人，会让人以为编排在跑。
+- **调用方不感知厂商**：仍由 resolver 决定"用哪个模型"，新增的是"按能力询问"的入口，
+  调用方只依赖接口（见 `backend/AGENTS.md` 三条补充约定）。
+
+被否方案：**手写 ReAct 循环**绕开 `ToolCallingChatModel`——能跑，但等于自己实现一套工具调用协议与
+多轮回灌，偏离"用 Eino 编排"的项目定位，也与 D1（工具用注册表 + 接口）重复造轮子。
+
+影响：任务清单补了第 6 组；规格补了一条"模型不支持工具时的行为"（用户可见）。
+
 ## Risks / Trade-offs
 
 - [工具结果摘要截断后模型信息不足] → 摘要用于展示，回灌给模型的内容用完整片段，两者分开（展示与推理不共用同一份裁剪逻辑）
