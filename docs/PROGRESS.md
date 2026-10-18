@@ -9,8 +9,8 @@
 > - 发现限制或债务，追加到第 6 节，不要口头说说过就算；
 > - 状态标记：✅ 完成 · 🚧 进行中 · ⬜ 未开始 · ⏸️ 挂起（附原因）。
 
-最后更新：2026-10-18（`add-react-agent-chat` / `add-retrieval-trace-console` /
-`add-dictionary-keyword-tokenizer` 均已完成并归档；**下次接手先看第 9.10 节**）
+最后更新：2026-10-18（V0.1 完成，4 个 change 全部归档，已 push；
+**下次接手先看第 9.11 节**）
 
 ## 1. 当前阶段
 
@@ -45,7 +45,7 @@ ReAct / 智能体问答已于 2026-10-18 补齐并端到端实测（见第 9.8 �
 | --- | --- | --- | --- |
 | 项目规则 | ✅ | `AGENTS.md` · `web/AGENTS.md` · `backend/AGENTS.md` | 三层规则就近生效 |
 | AI Coding 流程 | ✅ | `docs/ai-coding/` · 根 `AGENTS.md` 第 13 节 | harness / OpenSpec / Superpowers 三层分工、端到端流水线、每步门禁 |
-| 规格与变更（OpenSpec） | ✅ | `openspec/` | CLI 1.14.1；6 个 capability 规格；4 个 change 全部归档（见第 9.7~9.10 节）；Codex 侧技能在 `.agents/skills/`（12 个：核心 6 + 扩展 6） |
+| 规格与变更（OpenSpec） | ✅ | `openspec/` | CLI 1.14.1；6 个 capability 规格；4 个 change 全部归档（见第 9.11 节）；Codex 侧技能在 `.agents/skills/`（12 个：核心 6 + 扩展 6） |
 | 执行方法论（Superpowers） | ✅ | Codex 插件 `superpowers@superpowers-dev` 7.0.0 | brainstorm / TDD / 计划 / 复查 / worktree；**不落项目文件** |
 | 一键启停脚本 | ✅ | `scripts/einoflow.sh` | start / stop / restart / status / logs / tunnel |
 | 本地依赖编排 | ✅ | `docker-compose.yml` | PostgreSQL · Redis · MinIO · etcd · Milvus · Attu ·（rag profile）MinerU |
@@ -868,3 +868,84 @@ openspec instructions apply --change add-react-agent-chat --json   # 看当前�
 
 **归档**：已归档到 `openspec/changes/archive/2026-10-18-add-dictionary-keyword-tokenizer/`，
 `rag-pipeline` 的关键词要求已折回主规格。至此 4 个 change 全部完成并归档。
+
+### 9.11 2026-10-18 最新交接（下次从这里开始）
+
+**一句话状态**：V0.1 已完成并推送；4 个 OpenSpec change 全部归档，当前没有活跃 change。
+下一阶段从 V1.0 的「DSL + 画布」开始，或先补 V0.1 留下的产品缺口（见下方优先级）。
+
+**仓库**
+
+- 分支 `main`，与 `origin/main` 同步；交接基线是 `ac914a4`（docs：校正分词初始化耗时与后置过滤说明），
+  本交接文档提交后 HEAD 会再前进一个 docs 提交；
+- 工作区干净；上一轮整体 review 发现的许可证、失败检索留痕模式、词典词误杀等问题已修复并推送；
+- `openspec list` 应为空；`openspec/specs/` 有 6 个 capability：
+  `knowledge-base` / `rag-pipeline` / `rag-retrieval` / `model-config` / `chat-conversation` / `agent-chat`。
+
+**本会话完成了什么**
+
+1. `add-react-agent-chat`（28/28）：Eino ReAct、模型层工具调用（OpenAI 兼容 / Ollama）、
+   检索与计算工具、工具事件 SSE、`messages.tool_calls`、前端工具调用账本与开关；
+2. `add-retrieval-trace-console`（17/17）：检索历史/详情接口、临时参数召回测试（2 秒限流）、
+   `retrieval_runs.config_snapshot`、`/datasets/[id]/retrieval` 页面；
+3. `add-dictionary-keyword-tokenizer`（13/13）：gse 内嵌词典分词（默认）、领域词、`local` 回退、
+   重新入库验证与检索回归；
+4. 整体 review + push（修复 gse 许可证标注、失败检索 mode 留痕、词典词误杀等）。
+
+详细实测数据看 9.8 / 9.9 / 9.10，不要再在别处复制一份。
+
+**本地环境（2026-10-18 交接时）**
+
+- 依赖容器全部 healthy：PostgreSQL 5432、Redis 6379、MinIO 9000/9001、etcd、Milvus 19530、
+  Attu 3000、MinerU 8000；
+- 后端 8888（词典分词已启用）、前端 3001、本机重排 8080（MPS）；
+- 后端 / 前端 / 重排目前跑在会话内的持久终端，**会话结束会停**：
+
+```bash
+./scripts/einoflow.sh start     # 依赖 + 后端 + 前端 + 本机重排
+./scripts/einoflow.sh status
+```
+
+- 演示数据：应用 6「智能体验证」（agent）；应用 4「万用表问答助手」（rag）；
+  知识库 2「产品手册库」文档 5 已用词典分词重新入库（23 段）；知识库 10「制度手册」；
+  知识库 2 当前检索配置：vector / TopK 3 / 候选 10 / 阈值 0.75 / 重排关。
+- 检索历史里 run 62/63 等旧记录没有命中明细，是 `fulltext_score` 列名 bug 修复前写入失败，
+  不是查询问题；run 64 之后完整。
+
+**验证命令（提交前照旧）**
+
+```bash
+make backend-check
+cd web && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/next lint && ./node_modules/.bin/next build
+openspec validate --all --strict
+```
+
+本轮结果：后端全绿；前端 tsc/lint/build 全绿；OpenSpec 6 项全通过；
+`go test -race` 已覆盖 runtime / service / keyword。
+
+**下一块工作的建议顺序**
+
+1. **V1.0 工作流 DSL + 画布**（最大块，需新建 change）：前端 DSL ↔ 后端解析 ↔ 动态 Eino Graph；
+   按 `docs/PROGRESS.md` 第 5 节模块顺序，不要把插件市场 / MCP 提前；
+2. **应用级模型覆盖前端入口**（小）：知识库级已做，应用级目前只能调接口；
+3. **图片实体提取**（中）：MinerU 当前只给「这里有图」，需改 `--format zip` 取图并映射进 IR；
+4. **`datasets.embedding_model` 列取舍**（小）：目前不参与选型，接上或删列；
+5. **腾讯云 2C2G 部署验证 + Nginx 反代**（部署）：注意 2G 内存要拆分 MinerU/重排；
+6. 登录 / 账号体系（V0.1 仍是 `local-user` 占位）。
+
+**容易复发的坑（务必遵守）**
+
+- 不要打开 Next 的 `compress`，会把 SSE 攒成一大块；
+- v3 向量集合换名后旧文档搜不到，必须重走工作台；本轮词典分词切换已重新入库文档 5；
+- `retrieval_hits` 的全文分列名是 `fulltext_score`，GORM 字段必须显式 `column` 标签；
+- 词典初始化只在 `cmd/server` 启动时做一次，禁止放进请求路径；默认 `dictionary`，
+  可切 `local` 回退；`MinTokenFreq=30` 是内存/质量折中，不要随手调到完整词表（RSS +220MB）；
+- 智能体检索工具默认绑定本次知识库，模型传越界 ID 会被拒绝；未指定知识库时不注册检索工具；
+- 旧检索历史没有 `config_snapshot` 时显示「当时未记录」，不要用当前知识库配置反推。
+
+**接手最短路径**
+
+1. `./scripts/einoflow.sh start`，`curl -s localhost:8888/readyz`；
+2. 读本节 → 9.10（关键词）→ 9.9（检索追踪）→ 9.8（智能体）；
+3. 想开新功能：先 `$openspec-propose <change-id>`，等方案确认；不要直接改；
+4. 提交前跑上面三条门禁；提交后同步更新本文件第 3/4/6 节与本节状态。
