@@ -9,8 +9,8 @@
 > - 发现限制或债务，追加到第 6 节，不要口头说说过就算；
 > - 状态标记：✅ 完成 · 🚧 进行中 · ⬜ 未开始 · ⏸️ 挂起（附原因）。
 
-最后更新：2026-10-18（`add-react-agent-chat` 与 `add-retrieval-trace-console` 均已完成并归档；
-**下次接手先看第 9.9 节**，只剩 `add-dictionary-keyword-tokenizer`）
+最后更新：2026-10-18（`add-react-agent-chat` / `add-retrieval-trace-console` /
+`add-dictionary-keyword-tokenizer` 均已完成并归档；**下次接手先看第 9.10 节**）
 
 ## 1. 当前阶段
 
@@ -45,7 +45,7 @@ ReAct / 智能体问答已于 2026-10-18 补齐并端到端实测（见第 9.8 �
 | --- | --- | --- | --- |
 | 项目规则 | ✅ | `AGENTS.md` · `web/AGENTS.md` · `backend/AGENTS.md` | 三层规则就近生效 |
 | AI Coding 流程 | ✅ | `docs/ai-coding/` · 根 `AGENTS.md` 第 13 节 | harness / OpenSpec / Superpowers 三层分工、端到端流水线、每步门禁 |
-| 规格与变更（OpenSpec） | ✅ | `openspec/` | CLI 1.14.1；6 个 capability 规格；4 个 change（3 个已归档、1 个待开工，见第 9.7 / 9.8 / 9.9 节）；Codex 侧技能在 `.agents/skills/`（12 个：核心 6 + 扩展 6） |
+| 规格与变更（OpenSpec） | ✅ | `openspec/` | CLI 1.14.1；6 个 capability 规格；4 个 change 全部归档（见第 9.7~9.10 节）；Codex 侧技能在 `.agents/skills/`（12 个：核心 6 + 扩展 6） |
 | 执行方法论（Superpowers） | ✅ | Codex 插件 `superpowers@superpowers-dev` 7.0.0 | brainstorm / TDD / 计划 / 复查 / worktree；**不落项目文件** |
 | 一键启停脚本 | ✅ | `scripts/einoflow.sh` | start / stop / restart / status / logs / tunnel |
 | 本地依赖编排 | ✅ | `docker-compose.yml` | PostgreSQL · Redis · MinIO · etcd · Milvus · Attu ·（rag profile）MinerU |
@@ -89,7 +89,7 @@ ReAct / 智能体问答已于 2026-10-18 补齐并端到端实测（见第 9.8 �
 | 向量化 | ✅ | `engine/model` · `engine/model/ollama` | `Embedder` 接口 + Ollama 实现（批量 /api/embed、维度一致性校验） |
 | 模型解析（阶段 1 形态） | ✅ | `engine/model/resolver` | 配置驱动，启动即探测维度；阶段 2 换成数据库驱动，调用方不变 |
 | Milvus 向量存储（v3） | ✅ | `repository/milvus` | 单集合 + dataset_id 过滤；HNSW(COSINE) + 标量倒排索引 + **BM25 稀疏索引**；正文与关键词写入单一 BM25 输入字段，加载字段白名单排除它（内存与语料体积脱钩）；启动校验维度 |
-| 分段关键词 | ✅ | `engine/rag/keyword` | 入库自动抽取（默认最多 5 个，文档内 TF-IDF）；分词用**本地无词典统计分词**（Milvus 2.5.8 无分析器 RPC，见技术债 17）；关键词同时进入 BM25 输入文本，因此手工修改会真实影响检索 |
+| 分段关键词 | ✅ | `engine/rag/keyword` | 入库自动抽取（默认最多 5 个，文档内 TF-IDF）；默认分词为 **gse 内嵌词典 + 领域词**（`keyword.tokenizer=dictionary`，可切回 `local`）；关键词同时进入 BM25 输入文本，因此手工修改会真实影响检索 |
 | 三种检索方式 | ✅ | `engine/rag/retriever.go` · `repository/milvus` | `vector`（dense）/ `fulltext`（BM25 sparse）/ `hybrid`（两路 + 权重或 RRF 融合）；全文检索无需 embedding；阈值只在向量检索下生效 |
 | 检索器 | ✅ | `engine/rag/retriever.go` | 按知识库配置选检索方式 → 召回 → 回表还原片段（含溯源字段）→ 可选重排 |
 | 检索接口 | ✅ | `POST /api/v1/datasets/:id/search` | 返回命中片段 + page / locator / kind / titlePath + 排序分与两路原始分 |
@@ -444,7 +444,20 @@ TEI 走 amd64 模拟 **216 秒**，本机 MPS 服务 **0.52 秒**；20 条候选
 - **可回退**：分词实现用配置项选择，默认在对比实测达标后才切换；已入库关键词不自动重算
   （重走分段工作台即生效）。
 
-细节与任务拆分见 `openspec/changes/add-dictionary-keyword-tokenizer/`（提案状态，未实现）。
+细节与任务拆分见 `openspec/changes/archive/2026-10-18-add-dictionary-keyword-tokenizer/`
+（2026-10-18 实现并归档）。
+
+**D16 · 词典分词用「内嵌简体词表 + 频次阈值 + 领域词」（2026-10-18 实测定稿）**
+
+- 词表选 `gse` 内嵌 `zh_s`（简体），不引入外部词典文件；
+- `MinTokenFreq=30` 过滤生僻词（保留 6.8 万词）：完整词表 RSS +220MB、初始化 2.1s，
+  阈值 100 会把「前请」「先断」粘在一起，30 是内存与质量的折中点；
+- 只保留**词典里真实存在的词**：HMM 产出的未知组合（实测「测物断」「盖装」「紧螺丝」）
+  不再进入候选，否则会把旧实现的截断问题原样带回来；
+- 领域词代码内置（`defaultDomainWords`），实测被切碎的仪器术语补进去；
+  做成配置项属于 YAGNI，等出现真实维护需求再单开变更；
+- **代价**：二进制 53MB → 85MB（+32MB，内嵌词表），常驻内存 38.3MB → 135.9MB（+97.6MB），
+  启动多约 0.1~0.3s；在 2C2G 演示机上可接受，若将来吃紧再评估更小的词表。
 
 ## 6. 已知限制与技术债
 
@@ -453,7 +466,7 @@ TEI 走 amd64 模拟 **216 秒**，本机 MPS 服务 **0.52 秒**；20 条候选
 | 1 | 入库队列是**进程内**的 | 重启丢失排队任务；队列满只记日志，文档停在 `pending` | 引入持久队列（Redis）时替换 |
 | 2 | `token_count` 按**字符数**估算 | 切片长度控制不精确 | 接入 embedding 后换真实分词器 |
 | 3 | 图片实体未提取 | 切片里只有「这里有图」，没有图 | 改用 MinerU `--format zip` 取图 |
-| 4 | Eino 内核尚未接入 | 当前 AI 调用是直连，未经过编排层 | V0.1 剩余工作 |
+| 4 | ~~Eino 内核尚未接入~~ | **已解决**：RAG 问答、流式对话与 ReAct 均已过 Eino；只剩工作流 DSL 编排属于 V1.0 | — |
 | 5 | Ollama 的 rerank 模型不可用 | 实测 `/api/embed` 与 `/api/generate` 均 GGML_ASSERT 崩溃，且无 `/rerank` 端点 | 用 TEI 边车替代 |
 | 6 | `nomic-embed-text` 中文失效 | 实测排除，勿再考虑用于中文 | — |
 | 7 | MinerU 只验证过 PDF | Office / HTML 等格式未经真实文档测试 | 遇到时补充验证 |
@@ -466,7 +479,7 @@ TEI 走 amd64 模拟 **216 秒**，本机 MPS 服务 **0.52 秒**；20 条候选
 | 14 | 容器版 TEI 在 Apple Silicon 上极慢 | CPU 版镜像只有 linux/amd64，容器内无 AVX2，走标量路径：实测 2 条候选 216 秒 | **已解决**：改用 `deploy/rerank-local`（本机 GPU，0.52 秒），协议与 TEI 一致、后端无需改代码；x86 服务器仍用官方镜像 |
 | 15 | **2 核 2G 服务器装不下全部组件** | Milvus + MinerU + TEI 三者叠加超出 2C2G | 演示只起核心（Postgres / Milvus / MinIO / 后端 / 前端），解析与重排按需启动或放到其它机器 |
 | 16 | 重排超时是写死的 120 秒 | 远程或模拟环境下可能需要更长，也可能希望更短 | 接入配置项（`rerank.timeout`）而不是改常量 |
-| 17 | **关键词抽取质量一般**（无词典分词） | 抽出的关键词里会混入「断开电」「交流电压测」这类截断片段，需要人工清理 | **2026-10-12 已选①**：引入纯 Go 词典分词（`go-ego/gse`，MIT），见 change `add-dictionary-keyword-tokenizer`（**提案中**，实测数据达标后再切默认，保留配置项可回退）。不选②的理由：收益与现状重叠、代价是全链路升级 Milvus；**换实现只需换 `keyword.Tokenizer`，流水线不用改** |
+| 17 | ~~**关键词抽取质量一般**（无词典分词）~~ | **已解决（2026-10-18）**：默认切到 gse 内嵌词典分词；`断开电` / `交流电压测` / `开电池后盖` 已从演示文档关键词中消失，完整词（`断开电源` / `更换电池` / `背光灯键` / `短路蜂鸣`）正常出现 | 保留 `keyword.tokenizer=local` 作为回退；残余泛词（`允许` / `可能`）属于词性过滤范畴，不在本 change 内 |
 | 18 | Milvus 2.5.8 没有 `RunAnalyzer` | 无法用服务端分析器给关键词抽取供词（实测返回 `Unimplemented`）；关键词改由本地分词器处理 | 已绕过：关键词写进 BM25 输入文本后由服务端再切一次，查询侧同样由服务端切词，索引与查询仍然同口径 |
 | 19 | ~~混合检索的两路原始分拿不到~~ | **已解决（2026-10-11）**：融合改到 Go 侧做（两次检索 + 本地融合），两路分数都带回来，`retrieval_hits` 也就能记全 | 见 D12「融合放在本地」 |
 | 20 | 检索方式切换后老文档搜不到 | v3 集合是新的，v2 里的向量不会自动迁移；旧文档必须重走工作台 | 演示环境已重跑；正式迁移可写一次性脚本（重切 + 重写向量） |
@@ -615,7 +628,7 @@ RAG 只依赖「embedding 地址 + 模型名 + 维度」三项信息，先跑通
 
 | # | 事项 | 现状与建议 |
 | --- | --- | --- |
-| 1 | **关键词抽取质量**（技术债 17） | **2026-10-12 拍板：引入 gse 词典分词**（不升 Milvus）。已开 change `add-dictionary-keyword-tokenizer`（提案中，等审 proposal）；落地顺序是"先实现并对比实测 → 数据达标才切默认"，换实现只动 `keyword.Tokenizer` |
+| 1 | **关键词抽取质量**（技术债 17） | **已解决（2026-10-18）**：gse 内嵌词典分词已实现并切为默认（`keyword.tokenizer=dictionary`），可切回 `local`；实测数据见 9.10 |
 | 2 | 上传后必须人工确认分段（D11） | 使用者 2026-10-11 复认「保持现状」，并明确了三个替代方案都被否掉，不要再提 |
 | 3 | 混合检索阈值的语义（技术债 22） | 阈值只卡「有向量分」的候选，纯关键词命中的候选保留。使用者已知情 |
 | 4 | 加权融合的归一化（技术债 21） | **2026-10-12 拍板：默认保持「加权」**，RRF 继续作为可选融合方式（界面上已能选）。技术债 21 作为**已知取舍保留**、不再单独修；要更稳时自己切 RRF 或改分位数归一化 |
@@ -810,3 +823,45 @@ openspec instructions apply --change add-react-agent-chat --json   # 看当前�
 3 条新增要求已折回 `openspec/specs/rag-retrieval/spec.md`。
 
 **下一步**：只剩 `add-dictionary-keyword-tokenizer`（0/13）待开工。
+
+### 9.10 2026-10-18 交接：`add-dictionary-keyword-tokenizer` 完成（13/13）
+
+**关键词分词已切到 gse 内嵌词典。** 默认配置 `keyword.tokenizer=dictionary`，
+可切回 `local`；配置项在 `backend/configs/config.yaml` 与 `EINOFLOW_KEYWORD_TOKENIZER`。
+
+**资源实测（改造前 → 改造后）**：
+
+| 项 | 改造前 | 改造后 |
+| --- | --- | --- |
+| 后端二进制 | 53 MB | 85 MB（+32 MB） |
+| 常驻内存 RSS | 38.3 MB | 135.9 MB（+97.6 MB） |
+| 词典初始化 | — | 约 106~300 ms（启动时一次） |
+
+调参：完整词表（35 万词）RSS 261.5 MB、初始化 2.1 s，不采用；
+`MinTokenFreq=100` 会粘出「前请」「先断」，不采用；最终 `MinTokenFreq=30`（6.8 万词）。
+把测试二进制复制到 `/tmp` 空目录仍能分词，确认走内嵌词表。
+
+**关键词对照（知识库 2，文档 5 重新入库）**：
+
+- 改造前：`断开电`、`交流电压测`、`开电池后盖`、`测电`、`路时` 等片段混在关键词里；
+- 改造后：这些片段全部消失；出现 `断开电源`、`更换电池`、`背光灯键`、`短路蜂鸣`、
+  `功能转盘`、`小数点`、`指示灯`、`万用表` 等完整词；
+- 对比样本：MinerU 解析的 `docs/rag-test` 手册（167 段）+ 入库后的 23 段手册；
+  残余泛词（`允许`、`可能`、`导致`）是词性过滤问题，不在本 change 范围。
+
+**检索回归（重入后，同一问题）**：
+
+| 方式 | 首位命中 | 分数 | 返回条数 |
+| --- | --- | --- | --- |
+| 全文（BM25） | 《万用表RS-12的使用.pdf》第 6 页 · 更换电池 | 5.4494 | 5 |
+| 混合（RRF） | 同上 | 0.0327869 | 5 |
+| 向量 | 第 4 页 · 直流电压测量 | 0.7789788 | 5 |
+
+旧全文 run 36（2026-10-11）记录 `hitCount=3`，但命中明细因当时 `fulltext_score`
+列名 bug 未写入；本次无法逐分数对比，但首位命中与命中数都没有退化。
+
+**验证**：`make backend-check` 全绿；关键词包单测覆盖完整词、截断片段、ASCII 型号、
+空文本、自定义领域词与配置切换。默认切换单独提交（`e85f600`）。
+
+**归档**：已归档到 `openspec/changes/archive/2026-10-18-add-dictionary-keyword-tokenizer/`，
+`rag-pipeline` 的关键词要求已折回主规格。至此 4 个 change 全部完成并归档。

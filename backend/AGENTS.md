@@ -69,6 +69,15 @@ backend/
   按返回顺序当输入顺序会把分数/向量配错对象，且不会报错、只让结果悄悄变差；
   条数对不上时必须报错，不允许把缺失项当 0 处理。
 
+关键词分词（2026-10-18 补，见 change `add-dictionary-keyword-tokenizer`）：
+
+- 默认实现是 `engine/rag/keyword.DictionaryTokenizer`（`go-ego/gse` 内嵌简体词表 +
+  代码内置领域词），配置项 `keyword.tokenizer` 可切回 `local` 无词典实现；
+- 词典初始化只允许在 `cmd/server` 启动时做一次（约 100~300 ms），
+  **禁止放进请求路径**，否则每次入库都会多一段固定延迟；
+- 领域词在 `keyword/dictionary_tokenizer.go` 的 `defaultDomainWords` 维护；
+  新增领域词后跑 `go test ./internal/engine/rag/keyword/`，并重新入库验证关键词。
+
 ## 4. 编码规则
 
 - 错误必须包装并向上传递（fmt.Errorf + %w），禁止吞错；业务代码禁止用 panic 兜底。
