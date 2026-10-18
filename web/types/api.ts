@@ -92,6 +92,67 @@ export interface SearchResult {
   hits: SearchHit[];
 }
 
+/** 检索历史里的参数快照。 */
+export interface RetrievalRunConfig {
+  mode: SearchMode;
+  hybridRank?: HybridRank | "";
+  topK: number;
+  candidateTopK: number;
+  scoreThreshold: number;
+  filteredByThreshold: number;
+  rerank: boolean;
+  vectorWeight?: number;
+  fullTextWeight?: number;
+  rerankModel?: string;
+  rerankSkipped?: string;
+}
+
+/** 检索历史里的一条命中（含阶段与出处）。 */
+export interface RetrievalHitDetail extends SearchHit {
+  id: number;
+  runId: number;
+  stage: "vector" | "fulltext" | "hybrid" | "rerank" | string;
+}
+
+/** 检索历史记录。 */
+export interface RetrievalRunInfo {
+  id: number;
+  datasetId: number;
+  query: string;
+  topK: number;
+  embeddingModel: string;
+  mode: SearchMode;
+  candidateCount: number;
+  rerankModel: string;
+  rerankSkipped?: string;
+  latencyMs: number;
+  hitCount: number;
+  errorMessage?: string;
+  config: RetrievalRunConfig;
+  createdAt: string;
+  hits: RetrievalHitDetail[];
+}
+
+export interface RetrievalRunListResult {
+  items: RetrievalRunInfo[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** 召回测试的临时参数；不写入知识库配置。 */
+export interface RecallTestPayload {
+  query: string;
+  topK?: number;
+  candidateTopK?: number;
+  rerank?: boolean;
+  mode?: SearchMode;
+  hybridRank?: HybridRank;
+  vectorWeight?: number;
+  fullTextWeight?: number;
+  scoreThreshold?: number;
+}
+
 /*
  * 模型配置契约。
  * 对应后端 handler/modelconfig.go，字段名与后端 JSON 标签一一对应。

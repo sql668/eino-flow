@@ -45,12 +45,20 @@ export default function DatasetDetailPage() {
           </h1>
           <p className="text-sm leading-6 text-ink-muted">{dataset?.description || "（无描述）"}</p>
         </div>
-        <Link
-          href={`/datasets/${datasetId}/settings`}
-          className="rounded border border-grid bg-white px-3 py-1.5 text-sm text-ink transition-colors hover:border-ink-soft hover:bg-paper"
-        >
-          知识库设置
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href={`/datasets/${datasetId}/retrieval`}
+            className="rounded border border-grid bg-white px-3 py-1.5 text-sm text-ink transition-colors hover:border-ink-soft hover:bg-paper"
+          >
+            检索追踪
+          </Link>
+          <Link
+            href={`/datasets/${datasetId}/settings`}
+            className="rounded border border-grid bg-white px-3 py-1.5 text-sm text-ink transition-colors hover:border-ink-soft hover:bg-paper"
+          >
+            知识库设置
+          </Link>
+        </div>
       </header>
 
       {error ? (

@@ -19,6 +19,10 @@ import type {
   DocumentInfo,
   DocumentListResult,
   MessageListResult,
+  RetrievalRunInfo,
+  RetrievalRunListResult,
+  RecallTestPayload,
+  SearchResult,
   SegmentInfo,
   SegmentListResult,
 } from "@/types/api";
@@ -79,6 +83,21 @@ export const chunkApi = {
     http.get<RetrievalConfig>(`/api/v1/datasets/${datasetId}/retrieval-config`),
   saveRetrievalConfig: (datasetId: number, config: RetrievalConfig) =>
     http.put<RetrievalConfig>(`/api/v1/datasets/${datasetId}/retrieval-config`, config),
+  /** 检索历史：按知识库 + 时间范围分页（默认最近记录）。 */
+  listRetrievalRuns: (datasetId: number, params?: { from?: string; to?: string; page?: number; pageSize?: number }) =>
+    http.get<RetrievalRunListResult>(`/api/v1/datasets/${datasetId}/retrieval-runs`, {
+      query: {
+        from: params?.from,
+        to: params?.to,
+        page: params?.page ?? 1,
+        pageSize: params?.pageSize ?? 20,
+      },
+    }),
+  getRetrievalRun: (datasetId: number, runId: number) =>
+    http.get<RetrievalRunInfo>(`/api/v1/datasets/${datasetId}/retrieval-runs/${runId}`),
+  /** 召回测试：参数只在本次请求生效，不改知识库配置。 */
+  recallTest: (datasetId: number, payload: RecallTestPayload) =>
+    http.post<SearchResult>(`/api/v1/datasets/${datasetId}/recall-tests`, payload),
 
   /** 预览分段结果：不写库，可以反复调参 */
   preview: (documentId: number, config: ChunkConfig) =>
