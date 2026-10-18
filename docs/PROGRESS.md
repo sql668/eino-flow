@@ -45,7 +45,7 @@ ReAct / 智能体问答已于 2026-10-18 补齐并端到端实测（见第 9.8 �
 | --- | --- | --- | --- |
 | 项目规则 | ✅ | `AGENTS.md` · `web/AGENTS.md` · `backend/AGENTS.md` | 三层规则就近生效 |
 | AI Coding 流程 | ✅ | `docs/ai-coding/` · 根 `AGENTS.md` 第 13 节 | harness / OpenSpec / Superpowers 三层分工、端到端流水线、每步门禁 |
-| 规格与变更（OpenSpec） | ✅ | `openspec/` | CLI 1.14.1；5 个 capability 规格；4 个 change（1 个已归档、1 个进行中、2 个待开工，见第 9.7 节）；Codex 侧技能在 `.agents/skills/`（12 个：核心 6 + 扩展 6） |
+| 规格与变更（OpenSpec） | ✅ | `openspec/` | CLI 1.14.1；6 个 capability 规格；4 个 change（2 个已归档、2 个待开工，见第 9.7 / 9.8 节）；Codex 侧技能在 `.agents/skills/`（12 个：核心 6 + 扩展 6） |
 | 执行方法论（Superpowers） | ✅ | Codex 插件 `superpowers@superpowers-dev` 7.0.0 | brainstorm / TDD / 计划 / 复查 / worktree；**不落项目文件** |
 | 一键启停脚本 | ✅ | `scripts/einoflow.sh` | start / stop / restart / status / logs / tunnel |
 | 本地依赖编排 | ✅ | `docker-compose.yml` | PostgreSQL · Redis · MinIO · etcd · Milvus · Attu ·（rag profile）MinerU |
@@ -686,7 +686,7 @@ RAG 只依赖「embedding 地址 + 模型名 + 维度」三项信息，先跑通
 
 | change | 进度 | 状态 |
 | --- | --- | --- |
-| `add-react-agent-chat` | **28/28** | ✅ 完成，待归档（2026-10-18） |
+| `add-react-agent-chat` | **28/28** | ✅ 已归档到 `openspec/changes/archive/2026-10-18-add-react-agent-chat/` |
 | `add-dictionary-keyword-tokenizer` | 0/13 | ⬜ 已批准、未开工 |
 | `add-retrieval-trace-console` | 0/17 | ⬜ 已批准、未开工 |
 | ~~`add-chat-tests`~~ | 16/16 | ✅ 已归档到 `openspec/changes/archive/2026-10-12-add-chat-tests/` |
@@ -725,10 +725,12 @@ openspec instructions apply --change add-react-agent-chat --json   # 看当前�
 **git 状态**：本轮共 14 个提交，其中 **5 个未 push**（`git log --oneline origin/main..HEAD` 可看）。
 工作区当时只剩两处无害的空行改动，已随文档一起提交。
 
-### 9.8 2026-10-18 交接：`add-react-agent-chat` 完成（28/28）
+### 9.8 2026-10-18 交接：`add-react-agent-chat` 完成并归档（28/28）
 
 **V0.1 的 ReAct 问答已补齐并实测。** 本 change 的 28 个任务全部完成，
-`openspec validate --all --strict` 通过，后端与前端门禁均绿；下一步是复查后归档本 change。
+`openspec validate --all --strict` 通过，后端与前端门禁均绿；
+已归档到 `openspec/changes/archive/2026-10-18-add-react-agent-chat/`，规格已折回
+`openspec/specs/agent-chat/` 与 `openspec/specs/chat-conversation/`。
 
 **本会话完成的 5 组**（按提交顺序）：
 
@@ -761,8 +763,7 @@ openspec instructions apply --change add-react-agent-chat --json   # 看当前�
 
 **接手建议**：
 
-1. 先 `openspec archive add-react-agent-chat --yes` 归档（或先做一次 code review）；
-2. 下一块按优先级是 `add-retrieval-trace-console`（后端留痕已全，只缺接口与页面），
+1. 下一块按优先级是 `add-retrieval-trace-console`（后端留痕已全，只缺接口与页面），
    再做 `add-dictionary-keyword-tokenizer`；
-3. 本会话启动的依赖容器（Postgres / Redis / MinIO / etcd / Milvus / Attu）仍在运行；
+2. 本会话启动的依赖容器（Postgres / Redis / MinIO / etcd / Milvus / Attu）仍在运行；
    后端与前端是会话内持久终端，会话结束会停。重启用 `./scripts/einoflow.sh start`。
