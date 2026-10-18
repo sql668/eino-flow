@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"einoflow-backend/internal/engine/rag"
 	"einoflow-backend/internal/model"
@@ -13,7 +14,9 @@ import (
 
 // fakeDatasetRepo 只需要 GetByID 能返回预设结果。
 type fakeDatasetRepo struct {
-	err error
+	err     error
+	dataset *model.Dataset
+	updates int
 }
 
 func (f *fakeDatasetRepo) Create(context.Context, *model.Dataset) error { panic("未预期调用") }
@@ -22,6 +25,9 @@ func (f *fakeDatasetRepo) GetByID(context.Context, uint64) (*model.Dataset, erro
 	if f.err != nil {
 		return nil, f.err
 	}
+	if f.dataset != nil {
+		return f.dataset, nil
+	}
 	return &model.Dataset{ID: 1, Name: "知识库"}, nil
 }
 
@@ -29,7 +35,10 @@ func (f *fakeDatasetRepo) List(context.Context, repository.DatasetListFilter) ([
 	panic("未预期调用")
 }
 
-func (f *fakeDatasetRepo) Update(context.Context, *model.Dataset) error { panic("未预期调用") }
+func (f *fakeDatasetRepo) Update(context.Context, *model.Dataset) error {
+	f.updates++
+	return nil
+}
 
 func (f *fakeDatasetRepo) SoftDelete(context.Context, uint64) error { panic("未预期调用") }
 
@@ -38,19 +47,24 @@ type fakeRetriever struct {
 	output rag.RetrieveOutput
 	err    error
 	got    rag.RetrieveRequest
+	calls  int
 }
 
 func (f *fakeRetriever) Retrieve(_ context.Context, req rag.RetrieveRequest) (rag.RetrieveOutput, error) {
+	f.calls++
 	f.got = req
 	return f.output, f.err
 }
 
 // fakeTraceRepo 记录留痕写入，用于断言检索留痕的内容。
 type fakeTraceRepo struct {
-	run       *model.RetrievalRun
-	hits      []*model.RetrievalHit
-	nextRunID uint64
-	err       error
+	run        *model.RetrievalRun
+	hits       []*model.RetrievalHit
+	nextRunID  uint64
+	err        error
+	runs       []*model.RetrievalRun
+	details    []*repository.RetrievalHitDetail
+	lastFilter repository.RetrievalRunFilter
 }
 
 func (f *fakeTraceRepo) CreateRun(_ context.Context, run *model.RetrievalRun) error {
@@ -60,6 +74,7 @@ func (f *fakeTraceRepo) CreateRun(_ context.Context, run *model.RetrievalRun) er
 	f.nextRunID++
 	run.ID = f.nextRunID
 	f.run = run
+	f.runs = append(f.runs, run)
 	return nil
 }
 
@@ -69,6 +84,40 @@ func (f *fakeTraceRepo) CreateHits(_ context.Context, hits []*model.RetrievalHit
 	}
 	f.hits = hits
 	return nil
+}
+
+func (f *fakeTraceRepo) ListRuns(
+	_ context.Context, filter repository.RetrievalRunFilter,
+) ([]*model.RetrievalRun, int64, error) {
+	f.lastFilter = filter
+	return f.runs, int64(len(f.runs)), nil
+}
+
+func (f *fakeTraceRepo) GetRun(
+	_ context.Context, datasetID, runID uint64,
+) (*model.RetrievalRun, error) {
+	for _, run := range f.runs {
+		if run.ID == runID && run.DatasetID == datasetID {
+			return run, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f *fakeTraceRepo) ListHitsByRun(
+	_ context.Context, runIDs []uint64,
+) ([]*repository.RetrievalHitDetail, error) {
+	wanted := make(map[uint64]struct{}, len(runIDs))
+	for _, id := range runIDs {
+		wanted[id] = struct{}{}
+	}
+	out := make([]*repository.RetrievalHitDetail, 0, len(f.details))
+	for _, detail := range f.details {
+		if _, ok := wanted[detail.RunID]; ok {
+			out = append(out, detail)
+		}
+	}
+	return out, nil
 }
 
 // newTestRetrievalService 组装一个依赖全部打桩的检索服务。
@@ -257,5 +306,157 @@ func TestRetrievalService_SearchDatasetNotFound(t *testing.T) {
 	).Search(context.Background(), service.SearchInput{DatasetID: 999, Query: "问题"})
 	if !errors.Is(err, service.ErrNotFound) {
 		t.Fatalf("错误 = %v, 期望 ErrNotFound", err)
+	}
+}
+
+func TestRetrievalService_ListRunsPassesFilterAndGroupsHits(t *testing.T) {
+	from := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
+	traces := &fakeTraceRepo{
+		runs: []*model.RetrievalRun{
+			{ID: 1, DatasetID: 1, Query: "问题一"},
+			{ID: 2, DatasetID: 1, Query: "问题二"},
+		},
+		details: []*repository.RetrievalHitDetail{
+			{RetrievalHit: model.RetrievalHit{RunID: 1, Rank: 1}},
+			{RetrievalHit: model.RetrievalHit{RunID: 2, Rank: 1}},
+			{RetrievalHit: model.RetrievalHit{RunID: 2, Rank: 2}},
+		},
+	}
+	result, err := newTestRetrievalService(&fakeDatasetRepo{}, &fakeRetriever{}, traces).ListRuns(
+		context.Background(), service.ListRetrievalRunsInput{
+			DatasetID: 1, From: &from, To: &to, Page: 2, PageSize: 5,
+		})
+	if err != nil {
+		t.Fatalf("查询检索历史失败: %v", err)
+	}
+
+	if traces.lastFilter.Offset != 5 || traces.lastFilter.Limit != 5 {
+		t.Fatalf("分页参数未透传: %+v", traces.lastFilter)
+	}
+	if traces.lastFilter.From == nil || !traces.lastFilter.From.Equal(from) ||
+		traces.lastFilter.To == nil || !traces.lastFilter.To.Equal(to) {
+		t.Fatalf("时间范围未透传: %+v", traces.lastFilter)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("应返回 2 条记录，实际 %d 条", len(result.Items))
+	}
+	if len(result.Items[0].Hits) != 1 || len(result.Items[1].Hits) != 2 {
+		t.Fatalf("命中未按 run_id 归组: %d / %d",
+			len(result.Items[0].Hits), len(result.Items[1].Hits))
+	}
+}
+
+func TestRetrievalService_GetRunReturnsHits(t *testing.T) {
+	traces := &fakeTraceRepo{
+		runs: []*model.RetrievalRun{{ID: 7, DatasetID: 1, Query: "问题"}},
+		details: []*repository.RetrievalHitDetail{
+			{RetrievalHit: model.RetrievalHit{RunID: 7, Rank: 1, Stage: model.RetrievalStageRerank}},
+		},
+	}
+	view, err := newTestRetrievalService(&fakeDatasetRepo{}, &fakeRetriever{}, traces).
+		GetRun(context.Background(), 1, 7)
+	if err != nil {
+		t.Fatalf("查询详情失败: %v", err)
+	}
+	if view.Run.ID != 7 || len(view.Hits) != 1 || view.Hits[0].Stage != model.RetrievalStageRerank {
+		t.Fatalf("详情内容不符: %+v", view)
+	}
+
+	if _, err := newTestRetrievalService(&fakeDatasetRepo{}, &fakeRetriever{}, traces).
+		GetRun(context.Background(), 1, 999); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("不存在的记录应返回 ErrNotFound，实际: %v", err)
+	}
+}
+
+// panicRetriever 一旦被调用就让测试失败：历史查询不允许触发检索 / 模型调用。
+type panicRetriever struct{}
+
+func (panicRetriever) Retrieve(context.Context, rag.RetrieveRequest) (rag.RetrieveOutput, error) {
+	panic("查询历史不应触发检索或模型调用")
+}
+
+func TestRetrievalService_HistoryQueriesDoNotCallRetriever(t *testing.T) {
+	traces := &fakeTraceRepo{
+		runs: []*model.RetrievalRun{{ID: 1, DatasetID: 1, Query: "问题"}},
+	}
+	svc := newTestRetrievalService(&fakeDatasetRepo{}, panicRetriever{}, traces)
+
+	if _, err := svc.ListRuns(context.Background(), service.ListRetrievalRunsInput{DatasetID: 1}); err != nil {
+		t.Fatalf("查询历史失败: %v", err)
+	}
+	if _, err := svc.GetRun(context.Background(), 1, 1); err != nil {
+		t.Fatalf("查询详情失败: %v", err)
+	}
+}
+
+func TestRetrievalService_RecallTestUsesTempParamsWithoutUpdatingDataset(t *testing.T) {
+	threshold := float32(0.75)
+	mode := model.SearchModeHybrid
+	rank := model.HybridRankRRF
+	vectorWeight := 0.6
+	fullTextWeight := 0.4
+	retriever := &fakeRetriever{output: rag.RetrieveOutput{
+		Mode:      mode,
+		Threshold: threshold,
+	}}
+	datasets := &fakeDatasetRepo{dataset: &model.Dataset{
+		ID: 1,
+		RetrievalConfig: &model.RetrievalConfig{
+			TopK:           4,
+			CandidateTopK:  10,
+			ScoreThreshold: 0.5,
+			SearchMode:     model.SearchModeVector,
+		},
+	}}
+	traces := &fakeTraceRepo{}
+
+	if _, err := newTestRetrievalService(datasets, retriever, traces).RecallTest(
+		context.Background(), service.SearchInput{
+			DatasetID:      1,
+			Query:          "问题",
+			TopK:           3,
+			CandidateTopK:  8,
+			Mode:           &mode,
+			HybridRank:     &rank,
+			VectorWeight:   &vectorWeight,
+			FullTextWeight: &fullTextWeight,
+			ScoreThreshold: &threshold,
+		}); err != nil {
+		t.Fatalf("召回测试失败: %v", err)
+	}
+
+	if retriever.got.Mode != model.SearchModeHybrid || retriever.got.HybridRank != model.HybridRankRRF {
+		t.Fatalf("临时检索方式/融合方式未生效: %+v", retriever.got)
+	}
+	if retriever.got.TopK != 3 || retriever.got.CandidateTopK != 8 ||
+		retriever.got.ScoreThreshold != 0.75 {
+		t.Fatalf("临时 TopK / 阈值未生效: %+v", retriever.got)
+	}
+	if retriever.got.VectorWeight != 0.6 || retriever.got.FullTextWeight != 0.4 {
+		t.Fatalf("临时融合权重未生效: %+v", retriever.got)
+	}
+	if datasets.updates != 0 {
+		t.Fatal("召回测试不允许改写知识库配置")
+	}
+	if traces.run == nil || traces.run.ConfigSnapshot.ScoreThreshold != 0.75 {
+		t.Fatalf("留痕应记录本次实际参数: %+v", traces.run)
+	}
+}
+
+func TestRetrievalService_RecallTestRateLimited(t *testing.T) {
+	retriever := &fakeRetriever{}
+	svc := newTestRetrievalService(&fakeDatasetRepo{}, retriever, &fakeTraceRepo{})
+	input := service.SearchInput{DatasetID: 1, Query: "问题"}
+
+	if _, err := svc.RecallTest(context.Background(), input); err != nil {
+		t.Fatalf("首次召回测试失败: %v", err)
+	}
+	_, err := svc.RecallTest(context.Background(), input)
+	if !errors.Is(err, service.ErrRateLimited) {
+		t.Fatalf("连续调用应返回 ErrRateLimited，实际: %v", err)
+	}
+	if retriever.calls != 1 {
+		t.Fatalf("被限流的请求不应触发检索，实际 %d 次", retriever.calls)
 	}
 }

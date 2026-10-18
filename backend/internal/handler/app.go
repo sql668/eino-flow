@@ -208,6 +208,8 @@ func writeServiceError(c *app.RequestContext, err error) {
 		c.JSON(consts.StatusBadRequest, Fail(CodeInvalidParam, err.Error()))
 	case errors.Is(err, service.ErrNotFound):
 		c.JSON(consts.StatusNotFound, Fail(CodeNotFound, err.Error()))
+	case errors.Is(err, service.ErrRateLimited):
+		c.JSON(consts.StatusTooManyRequests, Fail(CodeRateLimited, err.Error()))
 	default:
 		// 未预期的错误只记日志，对外返回泛化信息，避免泄漏内部实现细节。
 		log.Printf("处理请求失败: %v", err)

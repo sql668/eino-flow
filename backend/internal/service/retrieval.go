@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"einoflow-backend/internal/engine/rag"
@@ -31,6 +32,13 @@ type SearchInput struct {
 	// Rerank 为 nil 时按默认策略（配了重排模型就启用），
 	// 显式传 true / false 用于对比两阶段检索的效果。
 	Rerank *bool
+	// 以下为**召回测试专用**的逐请求覆盖；nil 表示沿用知识库配置。
+	// 普通检索不传这些字段，避免调用方无意中绕过知识库设置。
+	Mode           *model.SearchMode
+	HybridRank     *model.HybridRank
+	VectorWeight   *float64
+	FullTextWeight *float64
+	ScoreThreshold *float32
 }
 
 // SearchResult 是检索结果。
@@ -71,6 +79,10 @@ type RetrievalService struct {
 	retriever Retriever
 	traces    repository.RetrievalRepository
 	defaults  RetrievalDefaults
+	// recallMu / lastRecallTest 实现召回测试的进程内频率限制。
+	// 多实例部署时每个实例各自限流，属于可接受的现状（与技术债 11 同类）。
+	recallMu       sync.Mutex
+	lastRecallTest map[uint64]time.Time
 }
 
 // RetrievalDefaults 是检索的兜底参数（知识库没配过检索设置时使用）。
@@ -143,6 +155,38 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 		rerank = &enabled
 	}
 
+	// 检索方式 / 融合 / 权重 / 阈值：默认来自知识库配置；
+	// 召回测试可逐请求覆盖，普通检索不传（保持"设置页说了算"）。
+	mode := retrievalConfig.SearchMode
+	if input.Mode != nil {
+		mode = *input.Mode
+	}
+	if !mode.IsValid() {
+		return nil, fmt.Errorf("%w: 不支持的检索方式 %q", ErrInvalidInput, mode)
+	}
+	hybridRank := retrievalConfig.HybridRank
+	if input.HybridRank != nil {
+		hybridRank = *input.HybridRank
+	}
+	if mode == repository.SearchModeHybrid && !hybridRank.IsValid() {
+		return nil, fmt.Errorf("%w: 不支持的融合方式 %q", ErrInvalidInput, hybridRank)
+	}
+	vectorWeight := float64(retrievalConfig.VectorWeight)
+	if input.VectorWeight != nil {
+		vectorWeight = *input.VectorWeight
+	}
+	fullTextWeight := float64(retrievalConfig.KeywordWeight)
+	if input.FullTextWeight != nil {
+		fullTextWeight = *input.FullTextWeight
+	}
+	threshold := retrievalConfig.ScoreThreshold
+	if input.ScoreThreshold != nil {
+		threshold = *input.ScoreThreshold
+	}
+	if threshold < 0 {
+		return nil, fmt.Errorf("%w: 相似度阈值不能为负数", ErrInvalidInput)
+	}
+
 	started := time.Now()
 	output, err := s.retriever.Retrieve(ctx, rag.RetrieveRequest{
 		DatasetID:     input.DatasetID,
@@ -152,12 +196,11 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 		Rerank:        rerank,
 		// 检索方式与融合参数来自知识库配置：同 Dify 一样在知识库设置页选，
 		// 检索时不再让调用方重复指定（否则「设置页选了全文、接口却在做向量」）。
-		Mode:           retrievalConfig.SearchMode,
-		HybridRank:     retrievalConfig.HybridRank,
-		VectorWeight:   float64(retrievalConfig.VectorWeight),
-		FullTextWeight: float64(retrievalConfig.KeywordWeight),
-		// 阈值来自知识库配置：这是「问什么都给一段」的解法，配置页可改。
-		ScoreThreshold: retrievalConfig.ScoreThreshold,
+		Mode:           mode,
+		HybridRank:     hybridRank,
+		VectorWeight:   vectorWeight,
+		FullTextWeight: fullTextWeight,
+		ScoreThreshold: threshold,
 	})
 	latency := time.Since(started)
 
@@ -177,7 +220,18 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 
 	// 留痕失败不能让检索失败：用户要的是结果，记录只是副作用。
 	// 但必须留下日志，否则「记录为什么是空的」会变成新的谜题。
-	runID, traceErr := s.recordTrace(ctx, input.DatasetID, query, topK, latency, output, err)
+	snapshot := model.RetrievalRunConfig{
+		Mode:                string(mode),
+		HybridRank:          string(hybridRank),
+		TopK:                topK,
+		CandidateTopK:       candidateTopK,
+		ScoreThreshold:      output.Threshold,
+		FilteredByThreshold: output.FilteredByThreshold,
+		Rerank:              rerank != nil && *rerank,
+		VectorWeight:        vectorWeight,
+		FullTextWeight:      fullTextWeight,
+	}
+	runID, traceErr := s.recordTrace(ctx, input.DatasetID, query, topK, latency, snapshot, output, err)
 	if traceErr != nil {
 		log.Printf("检索留痕写入失败（知识库 %d）: %v", input.DatasetID, traceErr)
 	}
@@ -189,6 +243,142 @@ func (s *RetrievalService) Search(ctx context.Context, input SearchInput) (*Sear
 	return result, nil
 }
 
+// RetrieveRunConfig 是检索历史的查询入参。
+type ListRetrievalRunsInput struct {
+	DatasetID uint64
+	// From / To 为空表示不限时间。
+	From     *time.Time
+	To       *time.Time
+	Page     int
+	PageSize int
+}
+
+// RetrievalRunView 是一条检索记录及其命中明细。
+type RetrievalRunView struct {
+	Run  *model.RetrievalRun
+	Hits []*repository.RetrievalHitDetail
+}
+
+// RetrievalRunListResult 是检索历史分页结果。
+type RetrievalRunListResult struct {
+	Items    []*RetrievalRunView
+	Total    int64
+	Page     int
+	PageSize int
+}
+
+// ListRuns 查询某个知识库的检索历史。
+func (s *RetrievalService) ListRuns(
+	ctx context.Context, input ListRetrievalRunsInput,
+) (*RetrievalRunListResult, error) {
+	if input.DatasetID == 0 {
+		return nil, fmt.Errorf("%w: 缺少知识库 ID", ErrInvalidInput)
+	}
+	// 先确认知识库存在：返回空列表无法区分「没有检索记录」与「知识库写错」。
+	if _, err := s.datasets.GetByID(ctx, input.DatasetID); err != nil {
+		return nil, translateError(err)
+	}
+	if input.From != nil && input.To != nil && input.From.After(*input.To) {
+		return nil, fmt.Errorf("%w: 开始时间不能晚于结束时间", ErrInvalidInput)
+	}
+
+	page, pageSize := normalizePaging(input.Page, input.PageSize)
+	runs, total, err := s.traces.ListRuns(ctx, repository.RetrievalRunFilter{
+		DatasetID: input.DatasetID,
+		From:      input.From,
+		To:        input.To,
+		Offset:    (page - 1) * pageSize,
+		Limit:     pageSize,
+	})
+	if err != nil {
+		return nil, err
+	}
+	hits, err := s.traces.ListHitsByRun(ctx, runIDs(runs))
+	if err != nil {
+		return nil, err
+	}
+	return &RetrievalRunListResult{
+		Items:    groupRetrievalHits(runs, hits),
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
+// GetRun 查询单条检索历史及其命中明细。
+func (s *RetrievalService) GetRun(
+	ctx context.Context, datasetID, runID uint64,
+) (*RetrievalRunView, error) {
+	if datasetID == 0 || runID == 0 {
+		return nil, fmt.Errorf("%w: 知识库与检索记录 ID 都必须为正整数", ErrInvalidInput)
+	}
+	run, err := s.traces.GetRun(ctx, datasetID, runID)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	hits, err := s.traces.ListHitsByRun(ctx, []uint64{runID})
+	if err != nil {
+		return nil, err
+	}
+	return &RetrievalRunView{Run: run, Hits: hits}, nil
+}
+
+// recallTestMinInterval 是同一知识库两次召回测试之间的最小间隔。
+//
+// 召回测试会真实调用 embedding 与重排，是付费路径；返回明确错误而不是排队，
+// 避免用户连续点击把队列堆满。
+const recallTestMinInterval = 2 * time.Second
+
+// RecallTest 用临时参数执行一次检索。
+//
+// 临时参数只进入本次 RetrieveRequest，不写回知识库配置；
+// 检索本身仍会写留痕（历史页能看到这次测试用的参数）。
+func (s *RetrievalService) RecallTest(
+	ctx context.Context, input SearchInput,
+) (*SearchResult, error) {
+	if input.DatasetID == 0 {
+		return nil, fmt.Errorf("%w: 缺少知识库 ID", ErrInvalidInput)
+	}
+
+	s.recallMu.Lock()
+	if s.lastRecallTest == nil {
+		s.lastRecallTest = make(map[uint64]time.Time)
+	}
+	now := time.Now()
+	if last, exists := s.lastRecallTest[input.DatasetID]; exists && now.Sub(last) < recallTestMinInterval {
+		s.recallMu.Unlock()
+		return nil, fmt.Errorf("%w: 召回测试过于频繁，请至少间隔 %s",
+			ErrRateLimited, recallTestMinInterval)
+	}
+	s.lastRecallTest[input.DatasetID] = now
+	s.recallMu.Unlock()
+
+	return s.Search(ctx, input)
+}
+
+func runIDs(runs []*model.RetrievalRun) []uint64 {
+	out := make([]uint64, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, run.ID)
+	}
+	return out
+}
+
+// groupRetrievalHits 把命中按 run_id 归到对应记录下。
+func groupRetrievalHits(
+	runs []*model.RetrievalRun, hits []*repository.RetrievalHitDetail,
+) []*RetrievalRunView {
+	byRun := make(map[uint64][]*repository.RetrievalHitDetail, len(runs))
+	for _, hit := range hits {
+		byRun[hit.RunID] = append(byRun[hit.RunID], hit)
+	}
+	views := make([]*RetrievalRunView, 0, len(runs))
+	for _, run := range runs {
+		views = append(views, &RetrievalRunView{Run: run, Hits: byRun[run.ID]})
+	}
+	return views
+}
+
 // recordTrace 写入一次检索与它的命中片段，返回检索记录 ID。
 func (s *RetrievalService) recordTrace(
 	ctx context.Context,
@@ -196,14 +386,18 @@ func (s *RetrievalService) recordTrace(
 	query string,
 	topK int,
 	latency time.Duration,
+	config model.RetrievalRunConfig,
 	output rag.RetrieveOutput,
 	retrieveErr error,
 ) (uint64, error) {
-	// 召回条数取候选数量；没走重排时候选就等于命中，两者一致。
-	recalled := len(output.Candidates)
+	// 召回条数必须包含被阈值筛掉的候选：历史页要解释"召回 10 条、只剩 2 条"，
+	// 只记筛后数量会让阈值看起来像"根本没召回"。
+	recalled := len(output.Candidates) + output.FilteredByThreshold
 	if recalled == 0 {
 		recalled = len(output.Hits)
 	}
+	config.RerankModel = output.RerankModel
+	config.RerankSkipped = output.RerankSkipped
 	run := &model.RetrievalRun{
 		DatasetID:      datasetID,
 		Query:          query,
@@ -214,6 +408,7 @@ func (s *RetrievalService) recordTrace(
 		RerankModel:    output.RerankModel,
 		LatencyMS:      int(latency.Milliseconds()),
 		HitCount:       len(output.Hits),
+		ConfigSnapshot: config,
 	}
 	if retrieveErr != nil {
 		run.ErrorMessage = truncateRunes(retrieveErr.Error(), traceErrorMessageLimit)

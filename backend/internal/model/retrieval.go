@@ -106,7 +106,29 @@ type RetrievalRun struct {
 	// ErrorMessage 记录失败原因；成功时为空。
 	// 失败的检索同样要留痕，否则「用户说搜不到」时无据可查。
 	ErrorMessage string
-	CreatedAt    time.Time
+	// ConfigSnapshot 是本次检索的完整参数快照（检索方式、融合、阈值、重排等）。
+	//
+	// 旧记录没有快照时是空对象：查询方据此显示"当时未记录"，
+	// 不能用当前知识库配置反推历史，否则历史现象会被现在的设置改写。
+	ConfigSnapshot RetrievalRunConfig `gorm:"serializer:json"`
+	CreatedAt      time.Time
+}
+
+// RetrievalRunConfig 是一次检索的参数快照。
+type RetrievalRunConfig struct {
+	Mode           string  `json:"mode"`
+	HybridRank     string  `json:"hybridRank,omitempty"`
+	TopK           int     `json:"topK"`
+	CandidateTopK  int     `json:"candidateTopK"`
+	ScoreThreshold float32 `json:"scoreThreshold"`
+	// FilteredByThreshold 是被相似度阈值筛掉的条数。
+	// 历史页要解释"为什么只剩 1 条"，只给阈值不够，还要知道筛掉了多少。
+	FilteredByThreshold int     `json:"filteredByThreshold"`
+	Rerank              bool    `json:"rerank"`
+	VectorWeight        float64 `json:"vectorWeight,omitempty"`
+	FullTextWeight      float64 `json:"fullTextWeight,omitempty"`
+	RerankModel         string  `json:"rerankModel,omitempty"`
+	RerankSkipped       string  `json:"rerankSkipped,omitempty"`
 }
 
 // RetrievalHit 是一次检索中的一个命中片段。
@@ -124,8 +146,10 @@ type RetrievalHit struct {
 	// VectorScore / FullTextScore 是两路各自的分数；该路未参与本次检索时为空。
 	// 它们与 Score 的区别是「原始分」与「排序分」：混合检索下两者不同，
 	// 分开记录才能回答「这条是靠语义还是靠关键词进来的」。
-	VectorScore   *float32
-	FullTextScore *float32
+	VectorScore *float32
+	// 列名是 fulltext_score（见 0010 迁移），不是 GORM 默认推断的 full_text_score；
+	// 不显式指定会导致每次留痕写入都报「列不存在」，而且只有查日志才能发现。
+	FullTextScore *float32 `gorm:"column:fulltext_score"`
 	// RerankScore 是重排分数，未做重排时为空。
 	RerankScore *float32
 	Stage       RetrievalStage

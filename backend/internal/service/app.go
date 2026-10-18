@@ -17,6 +17,8 @@ var (
 	ErrInvalidInput = errors.New("入参不合法")
 	// ErrNotFound 表示资源不存在。
 	ErrNotFound = errors.New("资源不存在")
+	// ErrRateLimited 表示请求过于频繁（例如召回测试）。
+	ErrRateLimited = errors.New("请求过于频繁")
 )
 
 // 分页约束：兜住非法入参，并防止 pageSize 过大把数据库拖垮。

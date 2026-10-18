@@ -12,6 +12,7 @@ const (
 	CodeInvalidParam = 40000
 	CodeUnauthorized = 40100
 	CodeNotFound     = 40400
+	CodeRateLimited  = 42900
 	CodeInternal     = 50000
 )
 
