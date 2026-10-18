@@ -71,12 +71,13 @@ export function ChatPanel({ app }: { app: AppInfo }) {
       .list(1, 50)
       .then((result) => {
         setDatasets(result.items);
-        if (result.items.length > 0) {
+        // 只有 RAG 必须选知识库；智能体默认"不使用"，避免悄悄换个知识库去检索。
+        if (needDataset && result.items.length > 0) {
           setDatasetId(result.items[0].id);
         }
       })
       .catch(() => setError("加载知识库列表失败"));
-  }, [supportsDataset]);
+  }, [needDataset, supportsDataset]);
 
   // 打开页面时恢复最近一次会话：否则刷新后既看不到历史回答，也看不到工具调用记录。
   // 失败不阻塞新对话——历史只是加分项，输入框仍然可用。
