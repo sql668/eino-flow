@@ -12,7 +12,7 @@
 
 ## What Changes
 
-- 引入带词典的纯 Go 分词器（`github.com/go-ego/gse`，MIT），实现既有的 `keyword.Tokenizer` 接口，
+- 引入带词典的纯 Go 分词器（`github.com/go-ego/gse`，Apache-2.0），实现既有的 `keyword.Tokenizer` 接口，
   流水线不改——这个接口本来就是为换实现留的（见 `local_tokenizer.go` 的注释）；
 - 保留现有启发式作为**后置过滤层**（子串抑制 + 首尾虚词边界），只把"候选生成"换成词典分词；
 - 支持**自定义词典**补充领域词（「万用表」「示波器」这类通用词典未必收录的专业词）；

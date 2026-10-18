@@ -31,11 +31,11 @@ ReAct / 智能体问答已于 2026-10-18 补齐并端到端实测（见第 9.8 �
 
 | 项 | 数值 |
 | --- | --- |
-| 后端 Go 代码 | 约 16700 行 / 85 个文件（不含测试） |
-| 后端测试 | **23 个测试文件 / 139 个测试函数**，全部包绿（含 Milvus 真机集成、全文 / 混合检索、PostgreSQL 建库往返）；无外部依赖时全量单测 **5.7 秒** |
-| 前端 TS/TSX | 约 7000 行 / 53 个文件（含 8 个页面、共享组件与 hooks） |
-| 已实现 HTTP 路由 | 47 条 |
-| 数据库迁移 | 0001_init … 0009_segment_keywords、0010_retrieval_modes |
+| 后端 Go 代码 | 约 19200 行 / 91 个文件（不含测试） |
+| 后端测试 | **31 个测试文件 / 193 个测试函数**，全部包绿（含 Milvus 真机集成、全文 / 混合检索、PostgreSQL 建库往返）；无外部依赖时全量单测约 10 秒 |
+| 前端 TS/TSX | 约 8000 行 / 56 个文件（含 9 个页面、共享组件与 hooks） |
+| 已实现 HTTP 路由 | 52 条 |
+| 数据库迁移 | 0001_init … 0011_message_tool_calls、0012_retrieval_run_config |
 
 ## 3. 模块清单与状态
 
@@ -432,7 +432,8 @@ TEI 走 amd64 模拟 **216 秒**，本机 MPS 服务 **0.52 秒**；20 条候选
 
 **D15 · 关键词抽取改走「词典分词 + 保留后置过滤」（2026-10-12 拍板，实现见 change）**
 
-按使用者决定：引入纯 Go 词典分词库 `github.com/go-ego/gse`（MIT），替换现有的无词典统计分词。
+按使用者决定：引入纯 Go 词典分词库 `github.com/go-ego/gse`（**Apache-2.0**；
+2026-10-18 审查时更正：提案里曾误写为 MIT），替换现有的无词典统计分词。
 
 - **为什么换**：现有四道启发式（频次、邻字多样性、首尾虚词、长词子串抑制）已是无词典方案的上限，
   残余的「断开电」这类片段是**词典缺失**问题——判断不了「断开电源」是词、「断开电」不是。
@@ -454,6 +455,8 @@ TEI 走 amd64 模拟 **216 秒**，本机 MPS 服务 **0.52 秒**；20 条候选
   阈值 100 会把「前请」「先断」粘在一起，30 是内存与质量的折中点；
 - 只保留**词典里真实存在的词**：HMM 产出的未知组合（实测「测物断」「盖装」「紧螺丝」）
   不再进入候选，否则会把旧实现的截断问题原样带回来；
+- 首尾虚词规则只对未登录候选生效；词典词（例如「在线」）不再被这条规则误杀，
+  子串抑制仍在最后统一执行；
 - 领域词代码内置（`defaultDomainWords`），实测被切碎的仪器术语补进去；
   做成配置项属于 YAGNI，等出现真实维护需求再单开变更；
 - **代价**：二进制 53MB → 85MB（+32MB，内嵌词表），常驻内存 38.3MB → 135.9MB（+97.6MB），
@@ -695,13 +698,13 @@ RAG 只依赖「embedding 地址 + 模型名 + 维度」三项信息，先跑通
 
 ### 9.7 2026-10-13 历史交接（已由 9.8 完成）
 
-本节保留当时的接手过程；**当前状态以 9.8 为准**。
+本节保留当时的接手过程；**当前状态以 9.10 为准**。
 
 | change | 进度 | 状态 |
 | --- | --- | --- |
 | `add-react-agent-chat` | **28/28** | ✅ 已归档到 `openspec/changes/archive/2026-10-18-add-react-agent-chat/` |
-| `add-dictionary-keyword-tokenizer` | 0/13 | ⬜ 已批准、未开工 |
-| `add-retrieval-trace-console` | 0/17 | ⬜ 已批准、未开工 |
+| `add-dictionary-keyword-tokenizer` | 13/13 | ✅ 已归档到 `openspec/changes/archive/2026-10-18-add-dictionary-keyword-tokenizer/` |
+| `add-retrieval-trace-console` | 17/17 | ✅ 已归档到 `openspec/changes/archive/2026-10-18-add-retrieval-trace-console/` |
 | ~~`add-chat-tests`~~ | 16/16 | ✅ 已归档到 `openspec/changes/archive/2026-10-12-add-chat-tests/` |
 
 **已完成的两件事（提交 `8b5b967`）**：
@@ -822,7 +825,7 @@ openspec instructions apply --change add-react-agent-chat --json   # 看当前�
 **归档**：已归档到 `openspec/changes/archive/2026-10-18-add-retrieval-trace-console/`，
 3 条新增要求已折回 `openspec/specs/rag-retrieval/spec.md`。
 
-**下一步**：只剩 `add-dictionary-keyword-tokenizer`（0/13）待开工。
+**下一步**：见 9.10；当时只剩的 `add-dictionary-keyword-tokenizer` 已完成并归档。
 
 ### 9.10 2026-10-18 交接：`add-dictionary-keyword-tokenizer` 完成（13/13）
 

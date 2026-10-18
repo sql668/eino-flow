@@ -117,15 +117,15 @@ codex plugin list                  # 已装插件与市场
 | OpenSpec CLI | ✅ 1.14.1（全局 npm） | 由 0.21.0 升级而来；旧版的 `~/.codex/prompts/openspec-*.md` 形态已废弃 |
 | `openspec/` 骨架 | ✅ 已初始化 | `openspec init --tools codex --language 中文（简体）`，项目语言设为简体中文 |
 | Codex 侧技能 | ✅ 12 个 | 生成在 `.agents/skills/openspec-*/SKILL.md`（Codex 认 skills，不认 `/openspec-*` 命令）；核心 6 + 扩展 6 |
-| 首批 capability 规格 | ✅ 5 个 | `knowledge-base` / `rag-pipeline` / `rag-retrieval` / `model-config` / `chat-conversation`，见 openspec.md 第 5 节 |
-| change 清单 | ✅ 4 个 | `add-react-agent-chat`（🚧 2/28）/ `add-retrieval-trace-console`（⬜）/ `add-dictionary-keyword-tokenizer`（⬜）/ `add-chat-tests`（✅ 已归档）。状态见 `docs/PROGRESS.md` 第 9.7 节 |
+| capability 规格 | ✅ 6 个 | `knowledge-base` / `rag-pipeline` / `rag-retrieval` / `model-config` / `chat-conversation` / `agent-chat`，见 openspec.md 第 5 节 |
+| change 清单 | ✅ 4 个（全部归档） | `add-react-agent-chat`（28/28）/ `add-retrieval-trace-console`（17/17）/ `add-dictionary-keyword-tokenizer`（13/13）/ `add-chat-tests`（16/16）。状态见 `docs/PROGRESS.md` 第 9.10 节 |
 | Superpowers | ✅ 7.0.0（插件 `superpowers@superpowers-dev`） | 见 superpowers.md；本机用本地市场安装，官方 curated 市场当前是 6.3.0 |
 | 扩展工作流 | ✅ 已启用（2026-10-12） | 全局 `profile: custom` + 12 个工作流；新增 6 个技能 `new / continue / ff / verify / bulk-archive / onboard` |
 
 ## 7. 三条容易踩的坑
 
 1. **不要为了「补全」而批量回填规格。** OpenSpec 官方明确建议按变更逐步长成；
-   本项目回填的 5 个 capability 都是「下一批变更要动的区域」，不是全仓库清点。
+   本项目回填的 6 个 capability 都是「下一批变更要动的区域」，不是全仓库清点。
 2. **版本管理范围是明确的**（2026-10-12 定稿）：`openspec/`、`.agents/`、`docs/` 与三层
    `AGENTS.md` 都进库；`docs/rag-test/`、`testdata/`、`.env` 继续忽略。
    别顺手放宽忽略规则——**被忽略的文件在 `git status` 里根本不显示**，

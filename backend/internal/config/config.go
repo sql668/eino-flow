@@ -214,7 +214,7 @@ type AgentConfig struct {
 // KeywordConfig 描述关键词抽取的参数。
 type KeywordConfig struct {
 	// Tokenizer 选择分词实现：local（无词典统计）或 dictionary（内嵌词典）。
-	// 默认 local，对比实测达标后再切 dictionary（见 change 的 D5）。
+	// 默认 dictionary；local 作为回退路径保留（见 change 的 D5）。
 	Tokenizer string `yaml:"tokenizer"`
 }
 

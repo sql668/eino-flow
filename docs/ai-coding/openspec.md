@@ -111,7 +111,7 @@ openspec/
 
 ## 5. 本仓库的落地内容
 
-### 5.1 首批 capability 规格（已回填）
+### 5.1 capability 规格（已回填）
 
 回填原则：只回填**下一批变更要动的区域**，不做全仓库清点（OpenSpec 官方也建议按变更逐步长成）。
 
@@ -121,21 +121,22 @@ openspec/
 | `rag-pipeline` | 解析（MinerU + 纯文本兜底）、清洗规则、多模式切片、向量化入库、维度校验、关键词抽取 |
 | `rag-retrieval` | 三种检索方式（向量 / 全文 / 混合）、阈值、两级重排、检索留痕 |
 | `model-config` | 厂商凭证、模型清单、三级绑定、凭证加密与掩码、连通性测试 |
-| `chat-conversation` | 流式对话的四类事件、引用来源、思考过程展示、会话与消息落库 |
+| `chat-conversation` | 流式对话事件（引用 / 思考 / 工具 / 增量 / 结束）、引用来源、思考过程展示、会话与消息落库 |
+| `agent-chat` | 工具注册与可用范围、ReAct 循环与轮次上限、工具事件与失败回灌、工具调用记录回看 |
 
 ### 5.2 change 清单与状态
 
-| change-id | 对应 PROGRESS 未完成项 | 状态（2026-10-13） |
+| change-id | 对应 PROGRESS 未完成项 | 状态（2026-10-18） |
 | --- | --- | --- |
-| `add-react-agent-chat` | 第 4 节 #3：ReAct / 智能体问答（V0.1 目标「ReAct/RAG 问答」的另一半） | 🚧 2/28（工具注册表 + 计算演示工具已落地） |
-| `add-retrieval-trace-console` | 第 4 节 #2：检索追踪 / 召回测试页面（后端留痕数据已就绪） | ⬜ 0/17 已批准未开工 |
+| `add-react-agent-chat` | 第 4 节 #3：ReAct / 智能体问答（V0.1 目标「ReAct/RAG 问答」的另一半） | ✅ 28/28，已归档（`archive/2026-10-18-add-react-agent-chat/`） |
+| `add-retrieval-trace-console` | 第 4 节 #2：检索追踪 / 召回测试页面（后端留痕数据已就绪） | ✅ 17/17，已归档（`archive/2026-10-18-add-retrieval-trace-console/`） |
 | `add-chat-tests` | 第 4 节 #10：对话链路单测（其他模块都有，只有 `service/chat.go` 与 Eino RAG chain 没有） | ✅ 已归档（`archive/2026-10-12-add-chat-tests/`） |
-| `add-dictionary-keyword-tokenizer` | 技术债 17：关键词抽取改走词典分词（gse），保留后置过滤与可回退配置 | ⬜ 0/13 已批准未开工 |
+| `add-dictionary-keyword-tokenizer` | 技术债 17：关键词抽取改走词典分词（gse），保留后置过滤与可回退配置 | ✅ 13/13，已归档（`archive/2026-10-18-add-dictionary-keyword-tokenizer/`） |
 
 进度随时用 `openspec list` 查；某个 change 的下一批任务用
 `openspec instructions apply --change <id> --json` 看。
 
-**当前进度与下一步统一记在 `docs/PROGRESS.md` 第 9.7 节**（避免两处各写一份而漂移）。
+**当前进度与下一步统一记在 `docs/PROGRESS.md` 第 9.10 节**（避免两处各写一份而漂移）。
 按流程：读 proposal → 用户点头 → 才动手；2026-10-12 起这几个 change 已获批准，可连续实施。
 
 ## 6. 与其他文档的分工

@@ -79,7 +79,7 @@ agent:
 
 # 关键词抽取
 keyword:
-  # local = 无词典统计分词（现状）；dictionary = gse 内嵌词典 + 领域词
+  # dictionary = gse 内嵌词典 + 领域词（默认）；local = 无词典统计分词（回退用）
   tokenizer: dictionary
 
 # 重排模型的配置兜底（数据库里没绑定时生效）。
