@@ -198,6 +198,13 @@ func main() {
 		vectorStore,
 	)
 
+	// 分词器在启动时构造一次：词典实现要加载内嵌词表（约 2 秒），
+	// 放进请求路径会让每次入库都多一段固定延迟。
+	keywordTokenizer, err := keyword.NewTokenizer(cfg.Keyword.Tokenizer)
+	if err != nil {
+		log.Fatalf("初始化关键词分词器失败: %v", err)
+	}
+
 	pipeline := rag.NewPipeline(rag.Deps{
 		Storage:   objectStore,
 		Documents: documentRepository,
@@ -206,9 +213,9 @@ func main() {
 		Resolver:  resolver,
 		Models:    modelResolver,
 		Vectors:   vectorStore,
-		// 分词在本地做（Milvus 2.5.8 不提供分析器 RPC，见 keyword.LocalTokenizer 的说明），
-		// 不额外引入分词依赖。
-		Keywords: keyword.NewTFIDF(keyword.NewLocalTokenizer()),
+		// 分词在本地做（Milvus 2.5.8 不提供分析器 RPC，见 keyword 包的说明）。
+		// 词典分词器在启动时初始化一次；配置项可切回无词典实现。
+		Keywords: keyword.NewTFIDF(keywordTokenizer),
 	})
 
 	// 检索兜底参数：知识库没配过检索设置时用它（配过则以知识库为准）。

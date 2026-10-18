@@ -49,6 +49,8 @@ type Config struct {
 	Rerank RerankConfig `yaml:"rerank"`
 	// Agent 是智能体运行参数。
 	Agent AgentConfig `yaml:"agent"`
+	// Keyword 是关键词抽取参数。
+	Keyword KeywordConfig `yaml:"keyword"`
 }
 
 // AppConfig 描述应用自身元信息。
@@ -209,6 +211,13 @@ type AgentConfig struct {
 	MaxToolRounds int `yaml:"max_tool_rounds"`
 }
 
+// KeywordConfig 描述关键词抽取的参数。
+type KeywordConfig struct {
+	// Tokenizer 选择分词实现：local（无词典统计）或 dictionary（内嵌词典）。
+	// 默认 local，对比实测达标后再切 dictionary（见 change 的 D5）。
+	Tokenizer string `yaml:"tokenizer"`
+}
+
 // 重排模式取值。
 const (
 	// RerankModeAuto 表示「配置了就用」。
@@ -310,6 +319,9 @@ const (
 
 	// 智能体默认最多调用 3 次工具（用户拍板，见 change add-react-agent-chat 的 D5）。
 	defaultAgentMaxToolRounds = 3
+
+	// 关键词分词默认仍走无词典实现；对比实测达标后切 dictionary。
+	defaultKeywordTokenizer = "local"
 
 	// 重排默认指向本机 TEI 边车（docker compose --profile rerank up -d tei）。
 	defaultRerankProvider = "tei"
@@ -416,6 +428,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Agent.MaxToolRounds <= 0 {
 		c.Agent.MaxToolRounds = defaultAgentMaxToolRounds
+	}
+	if c.Keyword.Tokenizer == "" {
+		c.Keyword.Tokenizer = defaultKeywordTokenizer
 	}
 	if c.Rerank.Provider == "" {
 		c.Rerank.Provider = defaultRerankProvider
@@ -535,6 +550,9 @@ func (c *Config) applyEnvOverrides() {
 	if v, ok := envInt("EINOFLOW_AGENT_MAX_TOOL_ROUNDS"); ok {
 		c.Agent.MaxToolRounds = v
 	}
+	if v, ok := envString("EINOFLOW_KEYWORD_TOKENIZER"); ok {
+		c.Keyword.Tokenizer = v
+	}
 	if v, ok := envString("EINOFLOW_RERANK_PROVIDER"); ok {
 		c.Rerank.Provider = v
 	}
@@ -618,6 +636,11 @@ func (c *Config) validate() error {
 	if c.Retrieval.CandidateTopK > model.MaxCandidateTopK {
 		return fmt.Errorf("retrieval.candidate_top_k 不能超过 %d，当前为 %d",
 			model.MaxCandidateTopK, c.Retrieval.CandidateTopK)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Keyword.Tokenizer)) {
+	case "local", "dictionary":
+	default:
+		return fmt.Errorf("keyword.tokenizer 只支持 local / dictionary，当前为 %q", c.Keyword.Tokenizer)
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Retrieval.RerankMode)) {
 	case RerankModeAuto, RerankModeOff, RerankModeStrict:

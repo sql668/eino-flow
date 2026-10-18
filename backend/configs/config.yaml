@@ -77,6 +77,11 @@ agent:
   # 单次问答最多调用几次工具。默认 3：成本可控，也避免模型陷入重复检索。
   max_tool_rounds: 3
 
+# 关键词抽取
+keyword:
+  # local = 无词典统计分词（现状）；dictionary = gse 内嵌词典 + 领域词
+  tokenizer: local
+
 # 重排模型的配置兜底（数据库里没绑定时生效）。
 # 边车由根目录 docker-compose.yml 的 tei 服务提供（profile: rerank）。
 # 只配 base_url 与模型名还不够，要让 RAG 真的用上它：
