@@ -316,7 +316,7 @@ func (s *ChatService) chatAgent(
 		retrievalTool, err := tools.NewKnowledgeRetrievalTool(agentSearcher{
 			service:   s,
 			citations: citations,
-		})
+		}, input.DatasetID)
 		if err != nil {
 			return err
 		}
@@ -352,6 +352,7 @@ func (s *ChatService) chatAgent(
 		Model:         toolModel,
 		Tools:         subset.Tools(),
 		MaxToolRounds: s.agentMaxToolRounds,
+		SystemPrompt:  agentSystemPrompt(input.DatasetID != 0),
 		Observer:      observer,
 	})
 	if err != nil {
@@ -439,6 +440,23 @@ func (s *ChatService) chatAgent(
 		ModelName:      describeChatModel(ctx, s.models, input.AppID),
 		LatencyMS:      assistant.LatencyMS,
 	})
+}
+
+// agentSystemPrompt 按本次可用工具生成行为约束。
+//
+// 为什么不把两条要求都写死：未选知识库时检索工具根本不存在，
+// 提示词却要求"必须检索"会让模型反复尝试调用一个不存在的工具。
+func agentSystemPrompt(hasRetrieval bool) string {
+	var builder strings.Builder
+	builder.WriteString("你是 EinoFlow 的智能体助手。请优先使用可用工具获取事实，再基于工具结果作答。\n")
+	builder.WriteString("要求：\n")
+	if hasRetrieval {
+		builder.WriteString("1. 涉及文档内容时必须先调用 knowledge_retrieval 检索，不要凭记忆回答；引用时标注来源（文档名、页码或标题路径）。\n")
+	}
+	builder.WriteString("2. 需要算术时调用 calculator，不要自己心算。\n")
+	builder.WriteString("3. 工具失败时如实说明，并基于已有信息继续作答；信息不足时明确说缺少什么。\n")
+	builder.WriteString("4. 用简洁的书面中文回答，先给结论，再给必要说明。")
+	return builder.String()
 }
 
 // emitAgentCitations 在确有引用时发出一次 citations 事件。

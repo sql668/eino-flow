@@ -27,9 +27,9 @@ func (f *fakeSearcher) Search(_ context.Context, datasetID uint64, query string)
 	return f.hits, f.err
 }
 
-func newRetrievalToolForTest(t *testing.T, searcher Searcher) (tool.InvokableTool, error) {
+func newRetrievalToolForTest(t *testing.T, searcher Searcher, defaultDatasetID uint64) (tool.InvokableTool, error) {
 	t.Helper()
-	return NewKnowledgeRetrievalTool(searcher)
+	return NewKnowledgeRetrievalTool(searcher, defaultDatasetID)
 }
 
 func TestKnowledgeRetrievalTool_ReturnsHitsWithSources(t *testing.T) {
@@ -47,7 +47,7 @@ func TestKnowledgeRetrievalTool_ReturnsHitsWithSources(t *testing.T) {
 			},
 		},
 	}
-	retrievalTool, err := newRetrievalToolForTest(t, searcher)
+	retrievalTool, err := newRetrievalToolForTest(t, searcher, 7)
 	if err != nil {
 		t.Fatalf("构造检索工具失败: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestKnowledgeRetrievalTool_ReturnsHitsWithSources(t *testing.T) {
 
 func TestKnowledgeRetrievalTool_EmptyResultIsNotError(t *testing.T) {
 	searcher := &fakeSearcher{}
-	retrievalTool, err := newRetrievalToolForTest(t, searcher)
+	retrievalTool, err := newRetrievalToolForTest(t, searcher, 7)
 	if err != nil {
 		t.Fatalf("构造检索工具失败: %v", err)
 	}
@@ -90,9 +90,41 @@ func TestKnowledgeRetrievalTool_EmptyResultIsNotError(t *testing.T) {
 	}
 }
 
+func TestKnowledgeRetrievalTool_UsesBoundDatasetWhenOmitted(t *testing.T) {
+	searcher := &fakeSearcher{}
+	retrievalTool, err := newRetrievalToolForTest(t, searcher, 7)
+	if err != nil {
+		t.Fatalf("构造检索工具失败: %v", err)
+	}
+
+	if _, err := retrievalTool.InvokableRun(context.Background(), `{"query":"怎么更换电池"}`); err != nil {
+		t.Fatalf("省略 dataset_ids 时应使用本次绑定的知识库: %v", err)
+	}
+	if searcher.calls != 1 || searcher.gotDataset != 7 {
+		t.Fatalf("应检索绑定的知识库 7，实际 calls=%d dataset=%d", searcher.calls, searcher.gotDataset)
+	}
+}
+
+func TestKnowledgeRetrievalTool_RejectsOutOfScopeDataset(t *testing.T) {
+	searcher := &fakeSearcher{}
+	retrievalTool, err := newRetrievalToolForTest(t, searcher, 7)
+	if err != nil {
+		t.Fatalf("构造检索工具失败: %v", err)
+	}
+
+	_, err = retrievalTool.InvokableRun(context.Background(),
+		`{"dataset_ids":[8],"query":"怎么更换电池"}`)
+	if !errors.Is(err, ErrDatasetOutOfScope) {
+		t.Fatalf("越界知识库应返回 ErrDatasetOutOfScope，实际: %v", err)
+	}
+	if searcher.calls != 0 {
+		t.Fatalf("越界时不允许发起检索，实际调用了 %d 次", searcher.calls)
+	}
+}
+
 func TestKnowledgeRetrievalTool_RejectsMultipleDatasetsBeforeSearch(t *testing.T) {
 	searcher := &fakeSearcher{}
-	retrievalTool, err := newRetrievalToolForTest(t, searcher)
+	retrievalTool, err := newRetrievalToolForTest(t, searcher, 7)
 	if err != nil {
 		t.Fatalf("构造检索工具失败: %v", err)
 	}
@@ -109,7 +141,7 @@ func TestKnowledgeRetrievalTool_RejectsMultipleDatasetsBeforeSearch(t *testing.T
 
 func TestKnowledgeRetrievalTool_RequiresDatasetBeforeSearch(t *testing.T) {
 	searcher := &fakeSearcher{}
-	retrievalTool, err := newRetrievalToolForTest(t, searcher)
+	retrievalTool, err := newRetrievalToolForTest(t, searcher, 0)
 	if err != nil {
 		t.Fatalf("构造检索工具失败: %v", err)
 	}
@@ -131,7 +163,7 @@ func TestKnowledgeRetrievalTool_RequiresDatasetBeforeSearch(t *testing.T) {
 func TestKnowledgeRetrievalTool_PropagatesSearcherError(t *testing.T) {
 	sentinel := errors.New("向量库不可用")
 	searcher := &fakeSearcher{err: sentinel}
-	retrievalTool, err := newRetrievalToolForTest(t, searcher)
+	retrievalTool, err := newRetrievalToolForTest(t, searcher, 7)
 	if err != nil {
 		t.Fatalf("构造检索工具失败: %v", err)
 	}
@@ -145,7 +177,7 @@ func TestKnowledgeRetrievalTool_PropagatesSearcherError(t *testing.T) {
 
 func TestKnowledgeRetrievalTool_RejectsEmptyQuery(t *testing.T) {
 	searcher := &fakeSearcher{}
-	retrievalTool, err := newRetrievalToolForTest(t, searcher)
+	retrievalTool, err := newRetrievalToolForTest(t, searcher, 7)
 	if err != nil {
 		t.Fatalf("构造检索工具失败: %v", err)
 	}
@@ -183,7 +215,7 @@ func TestToolNamesForChat(t *testing.T) {
 
 func TestToolNamesForChat_SelectsFromRegistry(t *testing.T) {
 	searcher := &fakeSearcher{}
-	retrievalTool, err := NewKnowledgeRetrievalTool(searcher)
+	retrievalTool, err := NewKnowledgeRetrievalTool(searcher, 7)
 	if err != nil {
 		t.Fatalf("构造检索工具失败: %v", err)
 	}

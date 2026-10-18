@@ -25,6 +25,11 @@ var (
 	ErrMultipleDatasets = errors.New("当前版本一次问答只支持一个知识库")
 	// ErrMissingDataset 表示调用检索工具时没有给出知识库。
 	ErrMissingDataset = errors.New("检索工具需要指定一个知识库")
+	// ErrDatasetOutOfScope 表示模型传入了本次问答范围之外的知识库。
+	//
+	// 必须拒绝而不是"能查就查"：应用只选了知识库 A，模型却查了 B，
+	// 属于越权访问，也让引用来源与用户的选择对不上。
+	ErrDatasetOutOfScope = errors.New("检索范围超出本次问答绑定的知识库")
 )
 
 // RetrievalHit 是检索工具返回给模型的一条命中。
@@ -61,18 +66,34 @@ type retrievalArgs struct {
 }
 
 // NewKnowledgeRetrievalTool 构造知识库检索工具。
-func NewKnowledgeRetrievalTool(searcher Searcher) (tool.InvokableTool, error) {
+func NewKnowledgeRetrievalTool(searcher Searcher, defaultDatasetID uint64) (tool.InvokableTool, error) {
 	if searcher == nil {
 		return nil, fmt.Errorf("构造检索工具失败: 缺少检索实现")
 	}
 
+	description := "检索知识库中的相关资料。涉及文档事实时先调用它，再基于结果回答。"
+	if defaultDatasetID != 0 {
+		// 模型看不到"本次请求带了哪个知识库"，必须把 ID 告诉它，
+		// 否则它会因为不知道参数填什么而干脆不调用（端到端实测踩到过）。
+		description = fmt.Sprintf(
+			"检索知识库中的相关资料（本次可用知识库 ID：%d）。涉及文档事实时先调用它；dataset_ids 可省略，若填写只能填 %d。",
+			defaultDatasetID, defaultDatasetID)
+	}
 	retrievalTool, err := utils.InferTool(
 		RetrievalToolName,
-		"检索知识库中的相关资料。需要依据文档回答问题时使用；dataset_ids 当前只能传一个知识库 ID。",
+		description,
 		func(ctx context.Context, args retrievalArgs) (string, error) {
-			datasetID, err := singleDatasetID(args.DatasetIDs)
+			datasetIDs := args.DatasetIDs
+			if len(datasetIDs) == 0 && defaultDatasetID != 0 {
+				// 单知识库场景下允许省略：少一个需要模型猜的参数，实际调用成功率更高。
+				datasetIDs = []uint64{defaultDatasetID}
+			}
+			datasetID, err := singleDatasetID(datasetIDs)
 			if err != nil {
 				return "", err
+			}
+			if defaultDatasetID != 0 && datasetID != defaultDatasetID {
+				return "", fmt.Errorf("%w：只能使用知识库 %d", ErrDatasetOutOfScope, defaultDatasetID)
 			}
 			query := strings.TrimSpace(args.Query)
 			if query == "" {
