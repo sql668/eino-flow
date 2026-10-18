@@ -27,8 +27,8 @@ var defaultDomainWords = []string{
 // DictionaryTokenizer 是基于词典的中文分词器。
 //
 // 与 LocalTokenizer 的区别只在"候选怎么来"：这里由 gse 的内嵌词表给出词边界，
-// 后置过滤（子串抑制、虚词边界、停用词）仍然复用同一套规则，
-// 保证换实现不会把已经压掉的噪声重新放出来。
+// 后置过滤（子串抑制、停用词）仍然复用同一套规则；首尾虚词规则只用于未登录候选，
+// 词典词本身可信，不能再用它误杀「在线」这类正常词。
 type DictionaryTokenizer struct {
 	seg gse.Segmenter
 }
@@ -97,10 +97,9 @@ func (t *DictionaryTokenizer) Tokenize(ctx context.Context, texts []string) ([][
 			if !knownWord(t.seg, trimmed) {
 				continue
 			}
-			// 词典词仍然过一遍首尾虚词过滤，保持与旧实现相同的后置规则。
-			if hasFunctionEdge(trimmed) {
-				continue
-			}
+			// 词典词本身就是可信词，不再用「首尾虚词」规则误杀：
+			// 该规则是为无词典候选设计的，套到词典词上会把「在线」这类正常词删掉。
+			// 子串抑制仍在末尾统一执行（suppressCoveredTokens）。
 			tokens = append(tokens, trimmed)
 		}
 		tokens = append(tokens, splitASCIITokens(clean)...)

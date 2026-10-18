@@ -52,6 +52,23 @@ func TestDictionaryTokenizer_NoLongTruncatedFragments(t *testing.T) {
 	}
 }
 
+func TestDictionaryTokenizer_KeepsKnownWordsWithFunctionPrefix(t *testing.T) {
+	tokenizer := newDictionaryTokenizer(t)
+	groups, err := tokenizer.Tokenize(context.Background(), []string{"请不要在线接通电源。"})
+	if err != nil {
+		t.Fatalf("分词失败: %v", err)
+	}
+	found := false
+	for _, token := range groups[0] {
+		if token == "在线" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("词典词「在线」不应被首尾虚词规则误杀: %v", groups[0])
+	}
+}
+
 func TestDictionaryTokenizer_ASCIIBoundaryUnchanged(t *testing.T) {
 	tokenizer := newDictionaryTokenizer(t)
 	groups, err := tokenizer.Tokenize(context.Background(), []string{"型号 RS-12 的万用表"})

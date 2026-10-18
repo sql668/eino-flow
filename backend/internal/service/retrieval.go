@@ -398,13 +398,17 @@ func (s *RetrievalService) recordTrace(
 	}
 	config.RerankModel = output.RerankModel
 	config.RerankSkipped = output.RerankSkipped
+	// 留痕记录「本次请求的检索方式」，而不是 output.Mode：
+	// 检索在拿到 output 之前失败时 output.Mode 是空值，
+	// 用它会把一次失败的混合检索记成向量检索，事后无法解释。
+	modeStage := model.RetrievalStage(config.Mode)
 	run := &model.RetrievalRun{
 		DatasetID:      datasetID,
 		Query:          query,
 		TopK:           topK,
 		CandidateCount: recalled,
 		EmbeddingModel: output.EmbeddingModel,
-		SearchMode:     string(stageForMode(output.Mode)),
+		SearchMode:     config.Mode,
 		RerankModel:    output.RerankModel,
 		LatencyMS:      int(latency.Milliseconds()),
 		HitCount:       len(output.Hits),
@@ -434,7 +438,7 @@ func (s *RetrievalService) recordTrace(
 			Score:         hit.Score,
 			VectorScore:   hit.VectorScore,
 			FullTextScore: hit.FullTextScore,
-			Stage:         stageForMode(output.Mode),
+			Stage:         modeStage,
 		})
 	}
 	for _, hit := range output.Hits {
@@ -460,21 +464,6 @@ func (s *RetrievalService) recordTrace(
 		return run.ID, err
 	}
 	return run.ID, nil
-}
-
-// stageForMode 把检索方式映射成留痕的阶段名。
-//
-// 两者取值刻意一致（vector / fulltext / hybrid）：留痕要回答的是
-// 「这次命中是哪条路线产生的」，用同一个词表才不会出现「模式叫 hybrid、阶段叫 fusion」的错位。
-func stageForMode(mode repository.SearchMode) model.RetrievalStage {
-	switch mode {
-	case repository.SearchModeFullText:
-		return model.RetrievalStageFullText
-	case repository.SearchModeHybrid:
-		return model.RetrievalStageHybrid
-	default:
-		return model.RetrievalStageVector
-	}
 }
 
 // truncateRunes 按字符数截断，避免中文被按字节切断产生半个字。
