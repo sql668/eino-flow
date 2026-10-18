@@ -53,6 +53,12 @@ func (f *fakeResolver) ChatModel(context.Context, enginemodel.ScopeRef) (enginem
 	return nil, enginemodel.ErrNotConfigured
 }
 
+func (f *fakeResolver) ToolCallingChatModel(
+	context.Context, enginemodel.ScopeRef,
+) (enginemodel.ToolCallingChatModel, error) {
+	return nil, enginemodel.ErrNotConfigured
+}
+
 func (f *fakeResolver) Reranker(context.Context, enginemodel.ScopeRef) (enginemodel.Reranker, error) {
 	if f.rerankerErr != nil {
 		return nil, f.rerankerErr

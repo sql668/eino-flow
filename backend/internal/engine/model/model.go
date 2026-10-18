@@ -14,6 +14,7 @@ package model
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 )
@@ -37,6 +38,11 @@ var (
 	// 单独一个错误而不是复用 ErrNotConfigured：两者修法不同——
 	// 「没配」要去配置页填，「不支持」得换厂商（实测 Ollama 就没有 rerank 端点）。
 	ErrRerankUnsupported = errors.New("该厂商不支持重排")
+	// ErrToolCallingUnsupported 表示所选模型不具备工具调用能力。
+	//
+	// 智能体形态必须据此明确失败：退化成普通对话会让使用者以为
+	// 「工具已经接上了」，实际模型从未调用过任何工具。
+	ErrToolCallingUnsupported = errors.New("该模型不支持工具调用")
 )
 
 // Embedder 把文本转换为向量。
@@ -57,6 +63,27 @@ type Embedder interface {
 // 我们再包一层同名接口只会多一次无意义的类型转换。
 // 厂商实现只要满足它，就能被 Eino 的图直接编排。
 type ChatModel = einomodel.BaseChatModel
+
+// ToolCallingChatModel 是带工具绑定能力的对话模型。
+//
+// 直接复用 Eino 的接口：智能体运行时（ReAct）只认它，
+// WithTools 返回新实例而不是原地修改，保证同一模型可被多个请求安全共享。
+type ToolCallingChatModel = einomodel.ToolCallingChatModel
+
+// RequireToolCalling 把普通对话模型提升为工具调用模型。
+//
+// 用类型断言而不是另建一层适配：模型"是否支持工具"是实现的事实属性，
+// 到这里还不能确定就应该明确报错，而不是退化成纯聊天。
+func RequireToolCalling(modelName string, chat ChatModel) (ToolCallingChatModel, error) {
+	if chat == nil {
+		return nil, fmt.Errorf("%w: 模型 %s 没有可用实例", ErrToolCallingUnsupported, modelName)
+	}
+	toolCalling, ok := chat.(ToolCallingChatModel)
+	if !ok {
+		return nil, fmt.Errorf("%w（模型 %s），请改用支持工具调用的模型", ErrToolCallingUnsupported, modelName)
+	}
+	return toolCalling, nil
+}
 
 // Reranker 对候选文档按与查询的相关性重新打分。
 //
@@ -90,6 +117,11 @@ type Resolver interface {
 	Embedder(ctx context.Context, scope ScopeRef) (Embedder, error)
 	// ChatModel 返回该作用域下生效的对话模型。
 	ChatModel(ctx context.Context, scope ScopeRef) (ChatModel, error)
+	// ToolCallingChatModel 返回该作用域下生效、且具备工具调用能力的对话模型。
+	//
+	// 单独一个入口而不是让调用方自己断言：解析与缓存只有一份，
+	// 调用方（智能体运行时）不应该知道具体厂商的实例类型。
+	ToolCallingChatModel(ctx context.Context, scope ScopeRef) (ToolCallingChatModel, error)
 	// Reranker 返回该作用域下生效的重排模型。
 	//
 	// 未配置时返回 ErrNotConfigured：调用方据此**跳过重排并说明原因**，

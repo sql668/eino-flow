@@ -178,6 +178,20 @@ func (r *DatabaseResolver) ChatModel(ctx context.Context, scope enginemodel.Scop
 	return effective.ChatModel, nil
 }
 
+// ToolCallingChatModel 实现 enginemodel.Resolver。
+//
+// 复用 ChatModelFor 的解析与缓存：同一个模型实例不该因为"要工具"再造一份，
+// 否则调用方会看到两个行为不一致的客户端（例如一个带着旧凭证）。
+func (r *DatabaseResolver) ToolCallingChatModel(
+	ctx context.Context, scope enginemodel.ScopeRef,
+) (enginemodel.ToolCallingChatModel, error) {
+	effective, err := r.ChatModelFor(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	return enginemodel.RequireToolCalling(effective.ModelName, effective.ChatModel)
+}
+
 // EffectiveChatModel 是「生效对话模型 + 可用实例」的组合。
 type EffectiveChatModel struct {
 	EffectiveModel

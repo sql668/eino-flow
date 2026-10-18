@@ -83,6 +83,17 @@ func (r *ConfigResolver) ChatModel(context.Context, model.ScopeRef) (model.ChatM
 		model.ErrNotConfigured)
 }
 
+// ToolCallingChatModel 实现 model.Resolver。
+//
+// 配置文件本来就不提供对话模型兜底，这里同样明确返回未配置，
+// 不构造一个"看起来能跑"的默认客户端。
+func (r *ConfigResolver) ToolCallingChatModel(
+	context.Context, model.ScopeRef,
+) (model.ToolCallingChatModel, error) {
+	return nil, fmt.Errorf("%w: 对话模型需在「模型配置」中设置（配置文件不提供兜底）",
+		model.ErrNotConfigured)
+}
+
 // Reranker 实现 model.Resolver。
 func (r *ConfigResolver) Reranker(context.Context, model.ScopeRef) (model.Reranker, error) {
 	if r.rerankErr != nil {

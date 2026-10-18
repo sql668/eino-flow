@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	enginemodel "einoflow-backend/internal/engine/model"
+	"einoflow-backend/internal/engine/model/ollama"
 	"einoflow-backend/internal/engine/model/resolver"
 	"einoflow-backend/internal/model"
 	"einoflow-backend/internal/repository"
@@ -183,6 +184,12 @@ func (r *fallbackResolver) Embedder(
 func (r *fallbackResolver) ChatModel(
 	context.Context, enginemodel.ScopeRef,
 ) (enginemodel.ChatModel, error) {
+	return nil, enginemodel.ErrNotConfigured
+}
+
+func (r *fallbackResolver) ToolCallingChatModel(
+	context.Context, enginemodel.ScopeRef,
+) (enginemodel.ToolCallingChatModel, error) {
 	return nil, enginemodel.ErrNotConfigured
 }
 
@@ -511,5 +518,53 @@ func TestDatabaseResolver_EffectiveLLM(t *testing.T) {
 	if _, err := newResolver(t, empty, nil).Effective(
 		context.Background(), model.ModelTypeLLM, enginemodel.ScopeRef{}); !errors.Is(err, enginemodel.ErrNotConfigured) {
 		t.Fatalf("错误 = %v, 期望 ErrNotConfigured", err)
+	}
+}
+
+// TestDatabaseResolver_ToolCallingChatModelReusesChatResolution 验证「按能力取模型」
+// 走的是同一套解析与缓存：同一作用域下返回同一个基础实例，作用域覆盖仍然生效。
+func TestDatabaseResolver_ToolCallingChatModelReusesChatResolution(t *testing.T) {
+	data := newStore()
+	providerID := data.addProvider("ollama", "http://127.0.0.1:11434", true)
+	globalID := data.addInstance(providerID, "qwen3:8b", model.ModelTypeLLM, true)
+	appID := data.addInstance(providerID, "qwen3:8b-app", model.ModelTypeLLM, true)
+	data.bind(model.ModelScopeGlobal, 0, 0, model.ModelTypeLLM, globalID)
+	data.bind(model.ModelScopeApp, 9, 0, model.ModelTypeLLM, appID)
+
+	instance := newResolver(t, data, nil)
+	ctx := context.Background()
+	scope := enginemodel.ScopeRef{AppID: 9}
+
+	chat, err := instance.ChatModel(ctx, scope)
+	if err != nil {
+		t.Fatalf("解析对话模型失败: %v", err)
+	}
+	toolChat, err := instance.ToolCallingChatModel(ctx, scope)
+	if err != nil {
+		t.Fatalf("解析工具模型失败: %v", err)
+	}
+
+	base, ok := chat.(*ollama.ChatModel)
+	if !ok {
+		t.Fatalf("测试期望 Ollama 实现，实际 %T", chat)
+	}
+	toolBase, ok := toolChat.(*ollama.ChatModel)
+	if !ok {
+		t.Fatalf("测试期望 Ollama 实现，实际 %T", toolChat)
+	}
+	// 指针相同说明命中了同一份缓存，而不是因为「要工具」重新构造了一个客户端。
+	if base != toolBase {
+		t.Fatal("工具模型应复用对话模型的解析与缓存，实际构造了两个实例")
+	}
+	if base.Name() != "qwen3:8b-app" {
+		t.Fatalf("应用级覆盖未生效：模型名 = %s", base.Name())
+	}
+
+	globalChat, err := instance.ChatModel(ctx, enginemodel.ScopeRef{})
+	if err != nil {
+		t.Fatalf("解析全局模型失败: %v", err)
+	}
+	if globalBase, ok := globalChat.(*ollama.ChatModel); !ok || globalBase == base {
+		t.Fatal("不同作用域应解析到不同模型实例")
 	}
 }
