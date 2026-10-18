@@ -29,5 +29,8 @@
 
 - 后端：`handler/`（新增两个只读/对比接口）、`service/`（编排）、`repository/postgres/retrieval.go`（已具备读写基础）；
 - 前端：新增页面 `web/app/(console)/datasets/[id]/retrieval`、复用现有 `Panel` / `Reading` 组件；
-- 数据：无表结构变更（`retrieval_runs` / `retrieval_hits` 已在写入）；
+- 数据：`retrieval_runs` 补一个 `config_snapshot` JSONB 列（迁移 `0012_*`）。
+  原提案写的是"无表结构变更"，但现有列缺阈值、融合权重与融合方式，
+  无法满足"返回配置快照"的规格；用 JSONB 而不是继续加散列，
+  是为了后续新增检索参数时不再改表。
 - 风险：召回测试会真实执行检索（含 embedding 与重排调用），需要在界面上限制频率与条数。

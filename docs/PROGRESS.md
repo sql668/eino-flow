@@ -9,8 +9,8 @@
 > - 发现限制或债务，追加到第 6 节，不要口头说说过就算；
 > - 状态标记：✅ 完成 · 🚧 进行中 · ⬜ 未开始 · ⏸️ 挂起（附原因）。
 
-最后更新：2026-10-18（`add-react-agent-chat` 28/28 完成并端到端实测；
-**下次接手先看第 9.8 节**，再决定归档本 change）
+最后更新：2026-10-18（`add-react-agent-chat` 与 `add-retrieval-trace-console` 均已完成并归档；
+**下次接手先看第 9.9 节**，只剩 `add-dictionary-keyword-tokenizer`）
 
 ## 1. 当前阶段
 
@@ -45,7 +45,7 @@ ReAct / 智能体问答已于 2026-10-18 补齐并端到端实测（见第 9.8 �
 | --- | --- | --- | --- |
 | 项目规则 | ✅ | `AGENTS.md` · `web/AGENTS.md` · `backend/AGENTS.md` | 三层规则就近生效 |
 | AI Coding 流程 | ✅ | `docs/ai-coding/` · 根 `AGENTS.md` 第 13 节 | harness / OpenSpec / Superpowers 三层分工、端到端流水线、每步门禁 |
-| 规格与变更（OpenSpec） | ✅ | `openspec/` | CLI 1.14.1；6 个 capability 规格；4 个 change（2 个已归档、2 个待开工，见第 9.7 / 9.8 节）；Codex 侧技能在 `.agents/skills/`（12 个：核心 6 + 扩展 6） |
+| 规格与变更（OpenSpec） | ✅ | `openspec/` | CLI 1.14.1；6 个 capability 规格；4 个 change（3 个已归档、1 个待开工，见第 9.7 / 9.8 / 9.9 节）；Codex 侧技能在 `.agents/skills/`（12 个：核心 6 + 扩展 6） |
 | 执行方法论（Superpowers） | ✅ | Codex 插件 `superpowers@superpowers-dev` 7.0.0 | brainstorm / TDD / 计划 / 复查 / worktree；**不落项目文件** |
 | 一键启停脚本 | ✅ | `scripts/einoflow.sh` | start / stop / restart / status / logs / tunnel |
 | 本地依赖编排 | ✅ | `docker-compose.yml` | PostgreSQL · Redis · MinIO · etcd · Milvus · Attu ·（rag profile）MinerU |
@@ -93,7 +93,7 @@ ReAct / 智能体问答已于 2026-10-18 补齐并端到端实测（见第 9.8 �
 | 三种检索方式 | ✅ | `engine/rag/retriever.go` · `repository/milvus` | `vector`（dense）/ `fulltext`（BM25 sparse）/ `hybrid`（两路 + 权重或 RRF 融合）；全文检索无需 embedding；阈值只在向量检索下生效 |
 | 检索器 | ✅ | `engine/rag/retriever.go` | 按知识库配置选检索方式 → 召回 → 回表还原片段（含溯源字段）→ 可选重排 |
 | 检索接口 | ✅ | `POST /api/v1/datasets/:id/search` | 返回命中片段 + page / locator / kind / titlePath + 排序分与两路原始分 |
-| 检索留痕 | ✅ | `repository/postgres/retrieval.go` | `retrieval_runs`（含 search_mode）+ `retrieval_hits`（含 vector_score / fulltext_score，stage 区分 vector / fulltext / hybrid / rerank）；可视化见阶段 4 |
+| 检索留痕 | ✅ | `repository/postgres/retrieval.go` | `retrieval_runs`（含 search_mode + `config_snapshot` 参数快照）+ `retrieval_hits`（含 vector_score / fulltext_score，stage 区分 vector / fulltext / hybrid / rerank）；历史查询与召回测试页已落地（见 9.9） |
 | 分段关键词编辑 API | ✅ | `PUT /api/v1/documents/:id/segments/:segmentId/keywords` | 覆盖式保存 → 同步重写该条向量（BM25 输入文本），保证「界面看到的关键词」与「检索用到的关键词」一致 |
 | 分段浏览页 | ✅ | `web/app/(console)/datasets/[id]/documents/[documentId]/segments` | 真实入库分段列表（序号 / 页码 / 章节 / 字数 / 展开正文）+ 关键词行内增删改；文档列表页「查看分段」入口 |
 | 上传大小上限 | ✅ | `configs/config.yaml` `upload.max_size_mb` | 默认 100 MB；两层拦截：Hertz `MaxRequestBodySize`（读请求体前拒绝）+ handler 按文件大小给出可读原因 |
@@ -140,7 +140,7 @@ ReAct / 智能体问答已于 2026-10-18 补齐并端到端实测（见第 9.8 �
 | 页面：模型配置 | ✅ | `app/(console)/settings/models` | 厂商凭证 / 模型清单 / 三级绑定 / 连通性测试 |
 | 共享组件 | ✅ | `components/ui` · `components/chunk` | Panel / Field / Reading / Button / **ConfirmDialog**（删除类二次确认，禁用 window.confirm）/ SeparatorField（多分隔符输入） |
 | 复用逻辑（hooks） | ✅ | `web/hooks` | `use-typewriter`（打字机，积压自适应）、`use-prefers-reduced-motion`（减少动效降级） |
-| **检索溯源 / 召回测试页** | ⬜ | — | 后端数据已就绪（`retrieval_runs` / `retrieval_hits`），页面未开始（阶段 4 与 7 合并做） |
+| **检索溯源 / 召回测试页** | ✅ | `web/app/(console)/datasets/[id]/retrieval` | 历史记录（配置快照 / 阶段分数 / 出处）+ 临时参数召回测试 + 多组并列对比；测试参数不写知识库配置 |
 | **登录与账号体系** | ⬜ | — | V0.1 用固定占位用户（`local-user`），权限过滤字段已在向量库里预留 |
 
 ## 4. 未完成事项（附阻塞原因）
@@ -148,7 +148,7 @@ ReAct / 智能体问答已于 2026-10-18 补齐并端到端实测（见第 9.8 �
 | # | 事项 | 阻塞原因 |
 | --- | --- | --- |
 | 1 | Rerank | ✅ 已完成（阶段 3）：TEI 协议两条实现（Linux 容器 / macOS 本机 GPU），两阶段分数落库 |
-| 2 | **检索追踪 / 召回测试页面** | ⬜ 后端留痕已在写（含检索方式、两路原始分、重排分），前端页面未开始（阶段 4 与 7 合并做） |
+| 2 | **检索追踪 / 召回测试页面** | ✅ 已完成（2026-10-18，change `add-retrieval-trace-console`）：历史回看 + 临时参数测试 + 多组对比，实测见 9.9 |
 | 3 | **ReAct / 智能体问答（app mode=agent）** | ✅ 已完成（2026-10-18）：工具注册表 + 知识库检索工具 + 计算工具 + Eino ReAct 运行时 + 工具事件 / 落库 + 前端工具块，端到端实测见 9.8；`workflow` 形态仍按 V1.0 计划拒绝 |
 | 4 | 前端基础页面 | ✅ 已完成：应用列表 / 知识库三页 / 分段浏览 / 对话调试 / 模型配置 |
 | 5 | 图片实体提取 | ⬜ MinerU 的 `image_body` 内容为空，需改用 `--format zip` 取图；当前切片里只有「这里有图」 |
@@ -481,10 +481,10 @@ TEI 走 amd64 模拟 **216 秒**，本机 MPS 服务 **0.52 秒**；20 条候选
 | 1 | 模型解析接口（配置驱动）+ Embedding(bge-m3) + Milvus + 检索接口 + 溯源字段返回 | ✅ 已完成（2026-10-10 实测通过） |
 | 2 | 模型配置模块（表 + 加密 + API + 前端页面 + 连通性测试） | ✅ 已完成（2026-10-10 实测通过） |
 | 3 | Rerank 边车（TEI）+ provider 路由 + 两阶段分数落库 | ✅ 已完成（2026-10-10，代码链路全部通过测试；本机模拟环境的性能见技术债 14） |
-| 4 | 检索追踪页面（命中片段可视化） | ⬜ |
+| 4 | 检索追踪页面（命中片段可视化） | ✅ 已完成（2026-10-18） |
 | 5 | Eino 内核接入 + RAG 问答 + SSE 流式对话 | ✅ RAG 问答与 ReAct 智能体均已接入 Eino 并通过端到端实测；SSE 含 citations / reasoning / tool_call / tool_result / delta / done |
 | 6 | 知识库完善（分段工作台 + 知识库设置 + 文档列表） | ✅ 前后端均已完成并实测（工作台：左配置 / 右预览；**预览为手动触发**——进页面自动算一次，改参数后要点「预览」并会标出「结果已过期」；清洗样本可见；预设与健康度提示） |
-| 7 | 召回测试（与检索追踪页合并） | ⬜ 按讨论放到下一轮 |
+| 7 | 召回测试（与检索追踪页合并） | ✅ 已完成（2026-10-18，与检索追踪同页） |
 | 8 | 全文检索 + 混合检索 + 分段关键词（方案 C，见 D12） | ✅ 已完成并实测（三种方式在同一问题下的差异见 D12 表格）；召回测试页与检索追踪页合并后放到下一轮 |
 | 5（补充） | ReAct / 智能体问答（工具调用 + 多轮工具结果回灌） | ✅ 已完成（2026-10-18，change `add-react-agent-chat` 28/28） |
 
@@ -767,3 +767,46 @@ openspec instructions apply --change add-react-agent-chat --json   # 看当前�
    再做 `add-dictionary-keyword-tokenizer`；
 2. 本会话启动的依赖容器（Postgres / Redis / MinIO / etcd / Milvus / Attu）仍在运行；
    后端与前端是会话内持久终端，会话结束会停。重启用 `./scripts/einoflow.sh start`。
+
+### 9.9 2026-10-18 交接：`add-retrieval-trace-console` 完成（17/17）
+
+**检索追踪 / 召回测试已落地。** 后端两个只读接口 + 一个测试接口，前端页面
+`/datasets/[id]/retrieval`，从知识库详情页可进入。
+
+**本 change 做了什么**：
+
+- `GET /datasets/:id/retrieval-runs`：按知识库 + 时间范围 + 分页查历史，返回参数快照与命中明细；
+- `GET /datasets/:id/retrieval-runs/:runId`：单条详情；
+- `POST /datasets/:id/recall-tests`：临时参数（方式 / 融合 / TopK / 候选数 / 阈值 / 重排 / 权重）
+  复用现有检索入口，**不写知识库配置**；同知识库 2 秒内连续调用返回 429；
+- 迁移 `0012_retrieval_run_config.sql`：`retrieval_runs.config_snapshot JSONB`。
+  原提案写"无表结构变更"，但现有列缺阈值 / 融合权重，无法满足配置快照；
+  已在 proposal / design D6 记录这处偏离；
+- 前端：左侧临时参数表单，右侧多组结果并列（最多 4 组，可移除 / 清空），
+  下方检索历史可展开看阶段分数与出处；参数标签固定在每组结果头部。
+
+**端到端实测（知识库 2，bge-m3 + Milvus + 本机 MPS 重排）**：
+
+| 对比 | 结果 |
+| --- | --- |
+| 阈值 0 | 召回 10 · 命中 3 · 筛掉 0；前三名：直流电压（0.779）、直流电流（0.750）、交流电压（0.699） |
+| 阈值 0.75 | 召回 10 · 命中 2 · 筛掉 8；只剩直流电压（0.779）与直流电流（0.750） |
+| 关重排 | 前三名：直流电压、直流电流、交流电压；耗时 226 ms |
+| 开重排 | 前三名：直流电流（向量 0.750 / 重排 0.999）、直流电压（0.779 / 0.999）、安全手册（0.670 / 0.881）；耗时 1691 ms |
+
+历史记录与测试结果一致（同一 `runId` 的 `config.filteredByThreshold` = 8/0）；
+召回测试后 `GET /datasets/2/retrieval-config` 仍是阈值 0.75、重排关，确认临时参数未落库。
+对话链路回归：一次 RAG 问答正常返回 citations / reasoning / delta / done（28.3 s）。
+
+**顺手修掉的存量 bug（重要）**：
+
+`retrieval_hits.full_text_score` 的 GORM 映射一直写成 `full_text_score`，
+而 0010 迁移建的是 `fulltext_score`——结果是**每次检索的命中留痕都写入失败**，
+只有 run 记录、没有 hit 明细。已在 `model.RetrievalHit.FullTextScore` 上显式标列名。
+修复前产生的历史 run（例如 62/63）没有命中明细，属于当时写入失败，不是查询问题；
+修复后的新 run（64 以后）明细完整。
+
+**归档**：已归档到 `openspec/changes/archive/2026-10-18-add-retrieval-trace-console/`，
+3 条新增要求已折回 `openspec/specs/rag-retrieval/spec.md`。
+
+**下一步**：只剩 `add-dictionary-keyword-tokenizer`（0/13）待开工。
