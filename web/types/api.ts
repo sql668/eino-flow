@@ -319,9 +319,25 @@ export interface MessageInfo {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   citations?: CitationInfo[];
+  /** 助手消息的工具调用记录（智能体形态才有）。 */
+  toolCalls?: MessageToolCallInfo[];
   tokenCount: number;
   latencyMs: number;
   createdAt: string;
+}
+
+/** 一次工具调用的摘要（与后端 model.MessageToolCall 对应）。 */
+export interface MessageToolCallInfo {
+  /** 本次问答内的调用序号，从 1 开始。 */
+  round: number;
+  callId: string;
+  name: string;
+  /** 截断后的入参 / 结果摘要。 */
+  arguments: string;
+  result: string;
+  failed?: boolean;
+  skipped?: boolean;
+  durationMs: number;
 }
 
 export interface MessageListResult {
@@ -331,7 +347,7 @@ export interface MessageListResult {
   pageSize: number;
 }
 
-/** SSE 事件负载：citations → delta（多次）→ done。 */
+/** SSE 事件负载：工具事件 / citations → delta（多次）→ done。 */
 export interface ChatCitationsPayload {
   citations: CitationInfo[];
 }
@@ -344,6 +360,9 @@ export interface ChatDeltaPayload {
 export interface ChatReasoningPayload {
   content: string;
 }
+
+/** 工具调用开始 / 结果事件（智能体形态才有）。 */
+export type ChatToolCallPayload = MessageToolCallInfo;
 
 export interface ChatDonePayload {
   conversationId: number;

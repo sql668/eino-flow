@@ -18,13 +18,13 @@ import type { AppInfo, AppMode } from "@/types/api";
 
 const modeLabels: Record<AppMode, string> = {
   chat: "对话（不检索）",
-  rag: "知识库问答（RAG）",
-  agent: "智能体（尚未支持）",
+  rag: "知识库问答（每次先检索）",
+  agent: "智能体（按需调用工具）",
   workflow: "工作流（尚未支持）",
 };
 
-// 只开放已实现的两类形态：摆出不能用的选项比不摆更糟。
-const availableModes: AppMode[] = ["chat", "rag"];
+// 只开放已实现的形态：workflow 属于 V1.0，摆出不能用的选项比不摆更糟。
+const availableModes: AppMode[] = ["chat", "rag", "agent"];
 
 export default function AppsPage() {
   const [apps, setApps] = useState<AppInfo[]>([]);
@@ -85,8 +85,9 @@ export default function AppsPage() {
           <span className="eyebrow">应用</span>
           <h1 className="text-[22px] font-semibold tracking-tight text-ink">对话入口</h1>
           <p className="max-w-2xl text-sm leading-6 text-ink-muted">
-            应用分两类：<span className="text-ink">对话</span>只聊天；
-            <span className="text-ink">知识库问答</span>会先检索你选中的知识库，回答带来源引用。
+            <span className="text-ink">对话</span>只聊天；<span className="text-ink">知识库问答</span>
+            每次先检索；<span className="text-ink">智能体</span>
+            按需调用检索 / 计算工具，调用过程可以展开核对。
           </p>
         </div>
         <span className="reading text-xs text-ink-soft">{apps.length} 个应用</span>
@@ -110,7 +111,10 @@ export default function AppsPage() {
           </Field>
         </div>
         <div className="w-52">
-          <Field label="形态" hint="对话=纯聊天；知识库问答=先检索再回答。">
+          <Field
+            label="形态"
+            hint="对话=纯聊天；知识库问答=每次先检索再回答；智能体=按需调用检索与计算工具。"
+          >
             <Select
               value={form.mode}
               onChange={(event) =>

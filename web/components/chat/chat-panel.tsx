@@ -3,12 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ThinkingBlock } from "@/components/chat/thinking-block";
+import { ToolCallsBlock } from "@/components/chat/tool-calls-block";
 import { TypewriterText } from "@/components/chat/typewriter-text";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
 import { chatApi, datasetsApi } from "@/lib/api/console";
 import { ApiError } from "@/lib/http";
-import type { AppInfo, CitationInfo, DatasetInfo } from "@/types/api";
+import type {
+  AppInfo,
+  CitationInfo,
+  DatasetInfo,
+  MessageInfo,
+  MessageToolCallInfo,
+} from "@/types/api";
 
 // 对话调试面板：流式渲染 + 引用来源。
 //
@@ -24,6 +31,8 @@ interface ChatMessage {
   /** 思考过程（推理模型才有，不进正文、不落库）。 */
   reasoning?: string;
   citations?: CitationInfo[];
+  /** 智能体形态下的工具调用记录（实时事件与历史消息共用同一结构）。 */
+  toolCalls?: MessageToolCallInfo[];
   streaming?: boolean;
   latencyMs?: number;
   model?: string;
@@ -36,19 +45,26 @@ export function ChatPanel({ app }: { app: AppInfo }) {
   const [datasetId, setDatasetId] = useState(0);
   const [question, setQuestion] = useState("");
   const [sending, setSending] = useState(false);
+  // 工具调用默认展示；关闭只影响呈现，后端仍会执行并落库。
+  const [showToolCalls, setShowToolCalls] = useState(true);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [error, setError] = useState("");
   const localIdRef = useRef(-1);
   const abortRef = useRef<AbortController | null>(null);
+  // 用户已经开始操作（发送 / 新建会话）后，迟到的历史加载不能覆盖当前界面。
+  const historyBlockedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // 是否「钉在底部」：用户往上翻看历史时不能强行把他拉回来，
   // 但只要他在底部附近，新内容就必须跟得住（流式 + 打字机都在持续长高）。
   const stickRef = useRef(true);
 
   const needDataset = app.mode === "rag";
+  // 智能体的知识库是可选的：选了才注册检索工具（与后端 D2 / D9 一致）。
+  const supportsDataset = app.mode === "rag" || app.mode === "agent";
 
-  // RAG 形态必须先选知识库：后端在没有 datasetId 时会直接拒绝（见 service/chat.go）。
+  // RAG 形态必须先选知识库；智能体可选用（选了才提供检索工具）。
   useEffect(() => {
-    if (!needDataset) {
+    if (!supportsDataset) {
       return;
     }
     datasetsApi
@@ -60,7 +76,41 @@ export function ChatPanel({ app }: { app: AppInfo }) {
         }
       })
       .catch(() => setError("加载知识库列表失败"));
-  }, [needDataset]);
+  }, [supportsDataset]);
+
+  // 打开页面时恢复最近一次会话：否则刷新后既看不到历史回答，也看不到工具调用记录。
+  // 失败不阻塞新对话——历史只是加分项，输入框仍然可用。
+  useEffect(() => {
+    let cancelled = false;
+    setHistoryLoaded(false);
+    chatApi
+      .listConversations(app.id)
+      .then(async (result) => {
+        const latest = result.items[0];
+        if (!latest || cancelled) {
+          return;
+        }
+        const history = await chatApi.listMessages(latest.id);
+        if (cancelled || historyBlockedRef.current) {
+          return;
+        }
+        setConversationId(latest.id);
+        setMessages(history.items.filter(isChatRole).map(toChatMessage));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError("加载历史会话失败，可直接开始新对话");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setHistoryLoaded(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [app.id]);
 
   const scrollToBottom = useCallback(() => {
     const element = scrollRef.current;
@@ -107,6 +157,7 @@ export function ChatPanel({ app }: { app: AppInfo }) {
     setError("");
     setQuestion("");
     setSending(true);
+    historyBlockedRef.current = true;
 
     // 用户消息与占位的助手消息一起入列：助手消息随后续增量更新，
     // 避免「先空白、答完突然出现」的观感。
@@ -122,7 +173,12 @@ export function ChatPanel({ app }: { app: AppInfo }) {
 
     try {
       await chatApi.stream(
-        { appId: app.id, question: text, conversationId, datasetId: needDataset ? datasetId : 0 },
+        {
+          appId: app.id,
+          question: text,
+          conversationId,
+          datasetId: supportsDataset ? datasetId : 0,
+        },
         {
           onCitations: (payload) =>
             setMessages((prev) =>
@@ -135,6 +191,22 @@ export function ChatPanel({ app }: { app: AppInfo }) {
               prev.map((item) =>
                 item.id === assistantId
                   ? { ...item, reasoning: (item.reasoning ?? "") + payload.content }
+                  : item,
+              ),
+            ),
+          onToolCall: (payload) =>
+            setMessages((prev) =>
+              prev.map((item) =>
+                item.id === assistantId
+                  ? { ...item, toolCalls: mergeToolCall(item.toolCalls, payload) }
+                  : item,
+              ),
+            ),
+          onToolResult: (payload) =>
+            setMessages((prev) =>
+              prev.map((item) =>
+                item.id === assistantId
+                  ? { ...item, toolCalls: mergeToolCall(item.toolCalls, payload) }
                   : item,
               ),
             ),
@@ -179,10 +251,11 @@ export function ChatPanel({ app }: { app: AppInfo }) {
       setSending(false);
       abortRef.current = null;
     }
-  }, [app.id, conversationId, datasetId, needDataset, question]);
+  }, [app.id, conversationId, datasetId, needDataset, supportsDataset, question]);
 
   const handleNewConversation = () => {
     abortRef.current?.abort();
+    historyBlockedRef.current = true;
     setConversationId(0);
     setMessages([]);
     setError("");
@@ -195,17 +268,31 @@ export function ChatPanel({ app }: { app: AppInfo }) {
           <span className="eyebrow">对话调试</span>
           <h1 className="text-[22px] font-semibold tracking-tight text-ink">{app.name}</h1>
           <span className="text-xs text-ink-muted">
-            {needDataset ? "先检索再回答，回答带来源引用" : "直接回答，不检索"}
+            {app.mode === "rag"
+              ? "先检索再回答，回答带来源引用"
+              : app.mode === "agent"
+                ? "按需调用检索 / 计算工具，调用过程可见"
+                : "直接回答，不检索"}
           </span>
         </div>
-        {needDataset ? (
+        {supportsDataset ? (
           <div className="w-56">
-            <Field label="知识库" hint="检索范围；回答里的 [n] 对应来源列表的第 n 条。">
+            <Field
+              label={needDataset ? "知识库" : "知识库（可选）"}
+              hint={
+                needDataset
+                  ? "检索范围；回答里的 [n] 对应来源列表的第 n 条。"
+                  : "选中后智能体可调用检索工具；不选则不提供检索工具。"
+              }
+            >
               <Select
                 value={datasetId}
                 onChange={(event) => setDatasetId(Number(event.target.value))}
               >
-                {datasets.length === 0 ? <option value={0}>（还没有知识库）</option> : null}
+                {app.mode === "agent" ? <option value={0}>不使用知识库</option> : null}
+                {datasets.length === 0 && app.mode !== "agent" ? (
+                  <option value={0}>（还没有知识库）</option>
+                ) : null}
                 {datasets.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
@@ -216,6 +303,17 @@ export function ChatPanel({ app }: { app: AppInfo }) {
           </div>
         ) : null}
         <div className="ml-auto flex items-end gap-3">
+          {app.mode === "agent" ? (
+            <label className="flex h-[34px] items-center gap-1.5 text-xs text-ink-muted">
+              <input
+                type="checkbox"
+                checked={showToolCalls}
+                onChange={(event) => setShowToolCalls(event.target.checked)}
+                className="h-3.5 w-3.5 accent-pri"
+              />
+              显示工具调用
+            </label>
+          ) : null}
           <span className="reading pb-2 text-xs text-ink-soft">
             {conversationId > 0 ? `会话 #${conversationId}` : "新会话"}
           </span>
@@ -237,17 +335,26 @@ export function ChatPanel({ app }: { app: AppInfo }) {
         {messages.length === 0 ? (
           // 空状态是「邀请使用」的位置：给出具体可做的事，而不是一句「暂无数据」。
           <div className="m-auto flex max-w-sm flex-col items-center gap-2 text-center">
-            <span className="eyebrow">还没有对话</span>
-            <p className="text-xs leading-5 text-ink-muted">
-              在下面输入问题开始。
-              {needDataset
-                ? "回答会先检索所选知识库，并列出引用到的文档与页码，可以逐条核对。"
-                : "当前应用不检索知识库，直接由对话模型回答。"}
-            </p>
+            <span className="eyebrow">{historyLoaded ? "还没有对话" : "正在加载历史"}</span>
+            {historyLoaded ? (
+              <p className="text-xs leading-5 text-ink-muted">
+                在下面输入问题开始。
+                {needDataset
+                  ? "回答会先检索所选知识库，并列出引用到的文档与页码，可以逐条核对。"
+                  : app.mode === "agent"
+                    ? "智能体会按需调用检索或计算工具，调用过程显示在回答上方。"
+                    : "当前应用不检索知识库，直接由对话模型回答。"}
+              </p>
+            ) : null}
           </div>
         ) : null}
         {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} onReveal={handleReveal} />
+          <MessageBubble
+            key={message.id}
+            message={message}
+            showToolCalls={showToolCalls}
+            onReveal={handleReveal}
+          />
         ))}
       </div>
 
@@ -288,9 +395,11 @@ export function ChatPanel({ app }: { app: AppInfo }) {
 /** MessageBubble 渲染单条消息；助手消息额外展示思考过程、引用来源与耗时。 */
 function MessageBubble({
   message,
+  showToolCalls,
   onReveal,
 }: {
   message: ChatMessage;
+  showToolCalls: boolean;
   onReveal: () => void;
 }) {
   if (message.role === "user") {
@@ -310,6 +419,9 @@ function MessageBubble({
         text={message.reasoning ?? ""}
         active={message.streaming === true && message.content === ""}
       />
+      {showToolCalls && message.toolCalls && message.toolCalls.length > 0 ? (
+        <ToolCallsBlock calls={message.toolCalls} />
+      ) : null}
       <div className="max-w-[90%] self-start rounded border border-grid bg-paper px-3.5 py-2.5 text-sm leading-6 text-ink">
         {message.content === "" && message.streaming ? (
           <span className="text-ink-soft">正在检索并组织回答…</span>
@@ -364,4 +476,47 @@ function MessageBubble({
       ) : null}
     </div>
   );
+}
+
+/** 历史消息只还原用户与助手两类；system / tool 由链路内部维护。 */
+function isChatRole(
+  message: MessageInfo,
+): message is MessageInfo & { role: "user" | "assistant" } {
+  return message.role === "user" || message.role === "assistant";
+}
+
+function toChatMessage(message: MessageInfo & { role: "user" | "assistant" }): ChatMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    citations: message.citations,
+    toolCalls: message.toolCalls,
+    latencyMs: message.latencyMs,
+  };
+}
+
+/**
+ * 合并同一次工具调用的开始与结果事件。
+ *
+ * 后端按轮次发两个事件（tool_call / tool_result），前端按 round 合并；
+ * 结果事件可能不带入参（或反之），合并时保留已有值，避免后到的空字段把先前信息抹掉。
+ */
+function mergeToolCall(
+  existing: MessageToolCallInfo[] | undefined,
+  incoming: MessageToolCallInfo,
+): MessageToolCallInfo[] {
+  const next = [...(existing ?? [])];
+  const index = next.findIndex((item) => item.round === incoming.round);
+  if (index === -1) {
+    next.push(incoming);
+  } else {
+    next[index] = {
+      ...next[index],
+      ...incoming,
+      arguments: incoming.arguments || next[index].arguments,
+      result: incoming.result || next[index].result,
+    };
+  }
+  return next.sort((a, b) => a.round - b.round);
 }

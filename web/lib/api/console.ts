@@ -12,6 +12,7 @@ import type {
   ChatDonePayload,
   ChatErrorPayload,
   ChatReasoningPayload,
+  ChatToolCallPayload,
   ConversationListResult,
   DatasetInfo,
   DatasetListResult,
@@ -123,6 +124,9 @@ export interface ChatStreamHandlers {
   onCitations: (payload: ChatCitationsPayload) => void;
   /** 思考过程增量（推理模型才有；普通模型不会触发）。 */
   onReasoning: (payload: ChatReasoningPayload) => void;
+  /** 工具调用开始 / 结果（智能体形态才有；顺序即轮次）。 */
+  onToolCall: (payload: ChatToolCallPayload) => void;
+  onToolResult: (payload: ChatToolCallPayload) => void;
   onDelta: (payload: ChatDeltaPayload) => void;
   onDone: (payload: ChatDonePayload) => void;
   onError: (payload: ChatErrorPayload) => void;
@@ -170,6 +174,12 @@ export const chatApi = {
             break;
           case "reasoning":
             handlers.onReasoning(event.data as ChatReasoningPayload);
+            break;
+          case "tool_call":
+            handlers.onToolCall(event.data as ChatToolCallPayload);
+            break;
+          case "tool_result":
+            handlers.onToolResult(event.data as ChatToolCallPayload);
             break;
           case "done":
             handlers.onDone(event.data as ChatDonePayload);
