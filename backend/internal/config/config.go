@@ -320,8 +320,8 @@ const (
 	// 智能体默认最多调用 3 次工具（用户拍板，见 change add-react-agent-chat 的 D5）。
 	defaultAgentMaxToolRounds = 3
 
-	// 关键词分词默认仍走无词典实现；对比实测达标后切 dictionary。
-	defaultKeywordTokenizer = "local"
+	// 关键词分词默认走词典实现；对比实测见 change add-dictionary-keyword-tokenizer。
+	defaultKeywordTokenizer = "dictionary"
 
 	// 重排默认指向本机 TEI 边车（docker compose --profile rerank up -d tei）。
 	defaultRerankProvider = "tei"

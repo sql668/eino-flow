@@ -80,7 +80,7 @@ agent:
 # 关键词抽取
 keyword:
   # local = 无词典统计分词（现状）；dictionary = gse 内嵌词典 + 领域词
-  tokenizer: local
+  tokenizer: dictionary
 
 # 重排模型的配置兜底（数据库里没绑定时生效）。
 # 边车由根目录 docker-compose.yml 的 tei 服务提供（profile: rerank）。
