@@ -49,6 +49,26 @@ type MessageCitation struct {
 	RerankScore *float32 `json:"rerankScore,omitempty"`
 }
 
+// MessageToolCall 是一条消息里记录的一次工具调用。
+//
+// 入参与结果都只存**摘要**（长度受限）：完整检索结果可能包含整段文档正文，
+// 全量塞进消息表会让会话体积失控；完整片段仍可通过 citations 与分段表回查。
+type MessageToolCall struct {
+	// Round 是本次问答内的调用序号，从 1 开始；同一轮可能并行调用多个工具。
+	Round int `json:"round"`
+	// CallID 是模型给出的调用 ID；Ollama 等不返回 ID 的实现会由适配器补一个。
+	CallID string `json:"callId"`
+	Name   string `json:"name"`
+	// Arguments / Result 是截断后的摘要。
+	Arguments string `json:"arguments"`
+	Result    string `json:"result"`
+	// Failed 表示工具执行失败；Skipped 表示因达到轮次上限而未执行。
+	Failed  bool `json:"failed"`
+	Skipped bool `json:"skipped"`
+	// DurationMS 是工具执行耗时；被跳过时为 0。
+	DurationMS int `json:"durationMs"`
+}
+
 // Message 是会话里的一条消息。
 type Message struct {
 	ID             uint64
@@ -58,6 +78,9 @@ type Message struct {
 	// Citations 只在助手消息上有值：本轮回答引用了哪些片段。
 	// 用 jsonb 存（GORM serializer），与消息一起读写，不需要额外查询。
 	Citations []MessageCitation `gorm:"serializer:json"`
+	// ToolCalls 只在助手消息上有值：本轮回答调用过哪些工具。
+	// 与 citations 同样用 jsonb 存，刷新会话时可直接回看推理依据。
+	ToolCalls []MessageToolCall `gorm:"serializer:json"`
 	// RetrievalRunID 指向 retrieval_runs：可以回看当时的召回与重排过程。
 	RetrievalRunID uint64
 	// TokenCount / LatencyMS / TraceID 服务于后续的可观测能力（V2.0 全链路追踪），

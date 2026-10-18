@@ -253,6 +253,7 @@ func main() {
 		postgres.NewMessageRepository(client),
 		modelResolver,
 		retrievalService,
+		cfg.Agent.MaxToolRounds,
 	)
 
 	// 入库是异步的：解析一份百页文档要几分钟，同步等待会挂住请求。

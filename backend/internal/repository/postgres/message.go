@@ -53,6 +53,10 @@ func (r *MessageRepository) Create(ctx context.Context, message *model.Message) 
 	if message.Citations == nil {
 		message.Citations = []model.MessageCitation{}
 	}
+	// tool_calls 同样是非空 jsonb：nil 切片会被序列化成 null，统一规范成 []。
+	if message.ToolCalls == nil {
+		message.ToolCalls = []model.MessageToolCall{}
+	}
 	if err := r.client.DB(ctx).Create(message).Error; err != nil {
 		return fmt.Errorf("写入消息失败: %w", err)
 	}

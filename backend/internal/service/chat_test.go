@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	enginemodel "einoflow-backend/internal/engine/model"
 	"einoflow-backend/internal/engine/rag"
+	"einoflow-backend/internal/engine/runtime"
 	"einoflow-backend/internal/model"
 	"einoflow-backend/internal/repository"
 )
@@ -87,6 +89,19 @@ func (f *fakeResolver) ChatModel(context.Context, enginemodel.ScopeRef) (enginem
 		return nil, f.err
 	}
 	return f.chatModel, nil
+}
+
+func (f *fakeResolver) ToolCallingChatModel(
+	context.Context, enginemodel.ScopeRef,
+) (enginemodel.ToolCallingChatModel, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	toolModel, ok := f.chatModel.(enginemodel.ToolCallingChatModel)
+	if !ok {
+		return nil, enginemodel.ErrToolCallingUnsupported
+	}
+	return toolModel, nil
 }
 
 type fakeDatasetRepo struct {
@@ -192,6 +207,10 @@ type testChatModel struct {
 	secondSent atomic.Bool
 }
 
+func (m *testChatModel) WithTools([]*schema.ToolInfo) (enginemodel.ToolCallingChatModel, error) {
+	return m, nil
+}
+
 func (m *testChatModel) Generate(_ context.Context, _ []*schema.Message, _ ...einomodel.Option) (*schema.Message, error) {
 	if m.streamErr != nil {
 		return nil, m.streamErr
@@ -260,7 +279,7 @@ func newChatFixture(mode model.AppMode, chatModel enginemodel.ChatModel) *chatFi
 		CandidateTopK: 20,
 	})
 	return &chatFixture{
-		service:  NewChatService(apps, conversations, messages, resolver, retrieval),
+		service:  NewChatService(apps, conversations, messages, resolver, retrieval, 3),
 		apps:     apps,
 		messages: messages,
 		resolver: resolver,
@@ -379,28 +398,205 @@ func TestChat_ModeRouting(t *testing.T) {
 		}
 	})
 
-	for _, mode := range []model.AppMode{model.AppModeAgent, model.AppModeWorkflow} {
-		t.Run(string(mode)+" 形态明确拒绝且不落任何消息", func(t *testing.T) {
-			fixture := newChatFixture(mode, &testChatModel{
-				chunks: []*schema.Message{schema.AssistantMessage("不该被调用", nil)},
-			})
-			err := fixture.service.Chat(context.Background(), ChatInput{
-				AppID: 4, Question: "你好", DatasetID: 7,
-			}, (&eventCollector{}).emit)
-
-			if !errors.Is(err, ErrInvalidInput) {
-				t.Fatalf("期望明确拒绝，实际: %v", err)
-			}
-			if !strings.Contains(err.Error(), string(mode)) {
-				t.Fatalf("错误信息应说明是哪种形态，实际: %v", err)
-			}
-			if len(fixture.messages.created) != 0 {
-				t.Fatal("被拒绝的形态不应写入任何消息（不能留下半截会话）")
-			}
-			if fixture.rag.calls != 0 {
-				t.Fatal("被拒绝的形态不应触发检索")
-			}
+	t.Run("workflow 形态明确拒绝且不落任何消息", func(t *testing.T) {
+		fixture := newChatFixture(model.AppModeWorkflow, &testChatModel{
+			chunks: []*schema.Message{schema.AssistantMessage("不该被调用", nil)},
 		})
+		err := fixture.service.Chat(context.Background(), ChatInput{
+			AppID: 4, Question: "你好", DatasetID: 7,
+		}, (&eventCollector{}).emit)
+
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("期望明确拒绝，实际: %v", err)
+		}
+		if !strings.Contains(err.Error(), string(model.AppModeWorkflow)) {
+			t.Fatalf("错误信息应说明是哪种形态，实际: %v", err)
+		}
+		if len(fixture.messages.created) != 0 {
+			t.Fatal("被拒绝的形态不应写入任何消息（不能留下半截会话）")
+		}
+		if fixture.rag.calls != 0 {
+			t.Fatal("被拒绝的形态不应触发检索")
+		}
+	})
+}
+
+// scriptedAgentModel 第一次调用返回预设工具调用，之后返回最终回答。
+// 用来验证 service 的智能体链路（事件顺序、落库、引用），不依赖真实模型。
+type scriptedAgentModel struct {
+	mu        sync.Mutex
+	calls     int
+	toolCalls []schema.ToolCall
+	final     string
+}
+
+func (m *scriptedAgentModel) WithTools([]*schema.ToolInfo) (enginemodel.ToolCallingChatModel, error) {
+	return m, nil
+}
+
+func (m *scriptedAgentModel) next() *schema.Message {
+	m.mu.Lock()
+	call := m.calls
+	m.calls++
+	m.mu.Unlock()
+	if call == 0 && len(m.toolCalls) > 0 {
+		return schema.AssistantMessage("", m.toolCalls)
+	}
+	return schema.AssistantMessage(m.final, nil)
+}
+
+func (m *scriptedAgentModel) Generate(
+	context.Context, []*schema.Message, ...einomodel.Option,
+) (*schema.Message, error) {
+	return m.next(), nil
+}
+
+func (m *scriptedAgentModel) Stream(
+	context.Context, []*schema.Message, ...einomodel.Option,
+) (*schema.StreamReader[*schema.Message], error) {
+	return schema.StreamReaderFromArray([]*schema.Message{m.next()}), nil
+}
+
+func TestChat_AgentModeUsesToolsAndPersistsCalls(t *testing.T) {
+	fixture := newChatFixture(model.AppModeAgent, &scriptedAgentModel{
+		toolCalls: []schema.ToolCall{{
+			ID:   "call_1",
+			Type: "function",
+			Function: schema.FunctionCall{
+				Name:      "calculator",
+				Arguments: `{"operand_a":2,"operand_b":3,"operator":"+"}`,
+			},
+		}},
+		final: "结果是 5",
+	})
+	collector := &eventCollector{}
+
+	if err := fixture.service.Chat(context.Background(), ChatInput{
+		AppID: 4, Question: "2+3 等于多少",
+	}, collector.emit); err != nil {
+		t.Fatalf("智能体问答失败: %v", err)
+	}
+
+	types := collector.types()
+	toolCallIndex := collector.firstIndexOf(ChatEventToolCall)
+	toolResultIndex := collector.firstIndexOf(ChatEventToolResult)
+	deltaIndex := collector.firstIndexOf(ChatEventDelta)
+	if toolCallIndex == -1 || toolResultIndex == -1 || deltaIndex == -1 {
+		t.Fatalf("应包含 tool_call / tool_result / delta，实际: %v", types)
+	}
+	if !(toolCallIndex < toolResultIndex && toolResultIndex < deltaIndex) {
+		t.Fatalf("工具事件必须先于该步文本，实际顺序: %v", types)
+	}
+	if collector.events[toolCallIndex].Tool == nil ||
+		collector.events[toolCallIndex].Tool.Name != "calculator" {
+		t.Fatal("tool_call 事件应带工具名与入参")
+	}
+	if collector.events[toolResultIndex].Tool == nil ||
+		collector.events[toolResultIndex].Tool.Result != "5" {
+		t.Fatal("tool_result 事件应带工具结果")
+	}
+
+	if len(fixture.messages.created) != 2 {
+		t.Fatalf("应落用户 + 助手两条消息，实际 %d 条", len(fixture.messages.created))
+	}
+	assistant := fixture.messages.created[1]
+	if len(assistant.ToolCalls) != 1 {
+		t.Fatalf("助手消息应记录 1 次工具调用，实际 %d 次", len(assistant.ToolCalls))
+	}
+	if assistant.ToolCalls[0].Name != "calculator" || assistant.ToolCalls[0].Result != "5" {
+		t.Fatalf("工具调用记录不完整: %+v", assistant.ToolCalls[0])
+	}
+}
+
+func TestChat_AgentModeRetrievalCitationsArriveBeforeDelta(t *testing.T) {
+	fixture := newChatFixture(model.AppModeAgent, &scriptedAgentModel{
+		toolCalls: []schema.ToolCall{{
+			ID:   "call_1",
+			Type: "function",
+			Function: schema.FunctionCall{
+				Name:      "knowledge_retrieval",
+				Arguments: `{"dataset_ids":[7],"query":"怎么更换电池"}`,
+			},
+		}},
+		final: "先断开电源 [1]",
+	})
+	fixture.withHits()
+	collector := &eventCollector{}
+
+	if err := fixture.service.Chat(context.Background(), ChatInput{
+		AppID: 4, Question: "怎么更换电池", DatasetID: 7,
+	}, collector.emit); err != nil {
+		t.Fatalf("智能体问答失败: %v", err)
+	}
+	if fixture.rag.calls != 1 {
+		t.Fatalf("带知识库的智能体问答应检索 1 次，实际 %d 次", fixture.rag.calls)
+	}
+
+	types := collector.types()
+	citationsIndex := collector.firstIndexOf(ChatEventCitations)
+	deltaIndex := collector.firstIndexOf(ChatEventDelta)
+	if citationsIndex == -1 || deltaIndex == -1 || citationsIndex > deltaIndex {
+		t.Fatalf("引用必须先于第一段回答，实际顺序: %v", types)
+	}
+	if len(collector.events[citationsIndex].Citations) != 1 ||
+		collector.events[citationsIndex].Citations[0].DocumentName != "万用表RS-12的使用.pdf" {
+		t.Fatal("引用事件应带文档出处")
+	}
+
+	assistant := fixture.messages.created[len(fixture.messages.created)-1]
+	if len(assistant.Citations) != 1 {
+		t.Fatal("助手消息应落引用，刷新后仍能回看来源")
+	}
+	if len(assistant.ToolCalls) != 1 ||
+		!strings.Contains(assistant.ToolCalls[0].Result, "万用表RS-12的使用.pdf") {
+		t.Fatalf("工具结果摘要应保留出处: %+v", assistant.ToolCalls)
+	}
+}
+
+func TestChat_AgentModeRejectsModelWithoutToolCalling(t *testing.T) {
+	fixture := newChatFixture(model.AppModeAgent, &testChatModel{})
+	fixture.resolver.err = enginemodel.ErrToolCallingUnsupported
+
+	err := fixture.service.Chat(context.Background(), ChatInput{
+		AppID: 4, Question: "2+3 等于多少",
+	}, (&eventCollector{}).emit)
+	if !errors.Is(err, enginemodel.ErrToolCallingUnsupported) {
+		t.Fatalf("模型不支持工具时应明确报错，实际: %v", err)
+	}
+	if len(fixture.messages.created) != 1 || fixture.messages.created[0].Role != model.MessageRoleUser {
+		t.Fatal("失败时只能留下用户消息，不能落退化回答")
+	}
+}
+
+func TestToolCallRecorder_TruncatesResultButKeepsSource(t *testing.T) {
+	recorder := &toolCallRecorder{}
+	recorder.record(runtime.ToolEvent{
+		Kind:      runtime.ToolEventCall,
+		Round:     1,
+		CallID:    "call_1",
+		Name:      "knowledge_retrieval",
+		Arguments: strings.Repeat("参", maxToolArgumentsRunes+50),
+	})
+	recorder.record(runtime.ToolEvent{
+		Kind:   runtime.ToolEventResult,
+		Round:  1,
+		CallID: "call_1",
+		Name:   "knowledge_retrieval",
+		Result: "来源：产品手册.pdf\n" + strings.Repeat("正文", maxToolResultRunes),
+	})
+
+	records := recorder.list()
+	if len(records) != 1 {
+		t.Fatalf("应记录 1 次工具调用，实际 %d 次", len(records))
+	}
+	if len([]rune(records[0].Arguments)) > maxToolArgumentsRunes {
+		t.Fatalf("入参摘要应截断，实际 %d 字符", len([]rune(records[0].Arguments)))
+	}
+	if len([]rune(records[0].Result)) > maxToolResultRunes {
+		t.Fatalf("结果摘要应截断，实际 %d 字符", len([]rune(records[0].Result)))
+	}
+	if !strings.Contains(records[0].Result, "产品手册.pdf") {
+		t.Fatal("截断必须保留开头的出处信息")
 	}
 }
 

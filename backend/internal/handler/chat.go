@@ -128,6 +128,16 @@ func writeSSE(writer network.ExtWriter, event service.ChatEvent) error {
 		// 思考过程与回答同构（都是一段增量文本），单独一种事件类型是为了让前端
 		// 能把它渲染成「思考中」而不是混进正文。
 		return writeSSEEvent(writer, service.ChatEventReasoning, map[string]string{"content": event.Content})
+	case service.ChatEventToolCall:
+		if event.Tool == nil {
+			return fmt.Errorf("工具调用事件缺少负载")
+		}
+		return writeSSEEvent(writer, service.ChatEventToolCall, event.Tool)
+	case service.ChatEventToolResult:
+		if event.Tool == nil {
+			return fmt.Errorf("工具结果事件缺少负载")
+		}
+		return writeSSEEvent(writer, service.ChatEventToolResult, event.Tool)
 	case service.ChatEventDone:
 		return writeSSEEvent(writer, service.ChatEventDone, map[string]any{
 			"conversationId": event.ConversationID,

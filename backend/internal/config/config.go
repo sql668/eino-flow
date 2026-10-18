@@ -47,6 +47,8 @@ type Config struct {
 	Retrieval RetrievalConfig `yaml:"retrieval"`
 	// Rerank 是重排模型的**配置兜底**（数据库里没绑定时生效），与 Embedding 同构。
 	Rerank RerankConfig `yaml:"rerank"`
+	// Agent 是智能体运行参数。
+	Agent AgentConfig `yaml:"agent"`
 }
 
 // AppConfig 描述应用自身元信息。
@@ -199,6 +201,14 @@ type RerankConfig struct {
 	Model    string `yaml:"model"`
 }
 
+// AgentConfig 描述智能体运行参数。
+type AgentConfig struct {
+	// MaxToolRounds 是单次问答允许的工具调用次数上限。
+	// 默认 3（见 change add-react-agent-chat 的 D5）：
+	// 不限轮次会让成本不可控，模型也可能陷入重复检索。
+	MaxToolRounds int `yaml:"max_tool_rounds"`
+}
+
 // 重排模式取值。
 const (
 	// RerankModeAuto 表示「配置了就用」。
@@ -297,6 +307,9 @@ const (
 	defaultRetrievalTopK = model.DefaultRetrievalTopK
 	// 召回条数默认取最终条数的 4 倍：给重排留挑选空间，又不至于把大量无关内容拉进来。
 	defaultRetrievalCandidateTopK = 20
+
+	// 智能体默认最多调用 3 次工具（用户拍板，见 change add-react-agent-chat 的 D5）。
+	defaultAgentMaxToolRounds = 3
 
 	// 重排默认指向本机 TEI 边车（docker compose --profile rerank up -d tei）。
 	defaultRerankProvider = "tei"
@@ -400,6 +413,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Retrieval.RerankMode == "" {
 		c.Retrieval.RerankMode = RerankModeAuto
+	}
+	if c.Agent.MaxToolRounds <= 0 {
+		c.Agent.MaxToolRounds = defaultAgentMaxToolRounds
 	}
 	if c.Rerank.Provider == "" {
 		c.Rerank.Provider = defaultRerankProvider
@@ -515,6 +531,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v, ok := envString("EINOFLOW_RETRIEVAL_RERANK"); ok {
 		c.Retrieval.RerankMode = v
+	}
+	if v, ok := envInt("EINOFLOW_AGENT_MAX_TOOL_ROUNDS"); ok {
+		c.Agent.MaxToolRounds = v
 	}
 	if v, ok := envString("EINOFLOW_RERANK_PROVIDER"); ok {
 		c.Rerank.Provider = v

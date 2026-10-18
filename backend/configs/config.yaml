@@ -72,6 +72,11 @@ retrieval:
   #   strict = 配了就必须成功，重排服务不可用即检索失败
   rerank: auto
 
+# 智能体问答
+agent:
+  # 单次问答最多调用几次工具。默认 3：成本可控，也避免模型陷入重复检索。
+  max_tool_rounds: 3
+
 # 重排模型的配置兜底（数据库里没绑定时生效）。
 # 边车由根目录 docker-compose.yml 的 tei 服务提供（profile: rerank）。
 # 只配 base_url 与模型名还不够，要让 RAG 真的用上它：

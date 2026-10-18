@@ -31,6 +31,14 @@ const DefaultMaxToolRounds = 3
 // service 需要据它给用户一个明确说明，而不是一句图执行失败。
 var ErrToolRoundLimit = errors.New("工具调用次数已达到上限")
 
+// IsToolRoundLimit 判断错误是否表示达到了工具调用上限。
+//
+// Eino 的流式错误可能在外层被包装，不能只比较一个错误值；
+// 这里把两种来源（我们自己的标记与 Eino 的步数超限）统一收敛。
+func IsToolRoundLimit(err error) bool {
+	return errors.Is(err, ErrToolRoundLimit) || errors.Is(err, compose.ErrExceedMaxSteps)
+}
+
 // ToolEventKind 是工具事件的类型。
 type ToolEventKind string
 

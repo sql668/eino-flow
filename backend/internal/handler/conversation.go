@@ -65,7 +65,9 @@ type messageResponse struct {
 	Role           string `json:"role"`
 	Content        string `json:"content"`
 	// Citations 是助手消息引用的片段：历史会话里回看时仍能看到来源（可溯源要求）。
-	Citations  []model.MessageCitation `json:"citations,omitempty"`
+	Citations []model.MessageCitation `json:"citations,omitempty"`
+	// ToolCalls 是助手消息的工具调用记录：刷新会话后仍能看到当时的调用过程。
+	ToolCalls  []model.MessageToolCall `json:"toolCalls,omitempty"`
 	TokenCount int                     `json:"tokenCount"`
 	LatencyMS  int                     `json:"latencyMs"`
 	CreatedAt  string                  `json:"createdAt"`
@@ -95,6 +97,7 @@ func newMessageResponse(m *model.Message) messageResponse {
 		Role:           string(m.Role),
 		Content:        m.Content,
 		Citations:      m.Citations,
+		ToolCalls:      m.ToolCalls,
 		TokenCount:     m.TokenCount,
 		LatencyMS:      m.LatencyMS,
 		CreatedAt:      formatTime(m.CreatedAt),
