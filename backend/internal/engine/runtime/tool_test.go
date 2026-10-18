@@ -95,3 +95,49 @@ func TestRegistry_RejectsNilTool(t *testing.T) {
 		t.Fatal("nil 工具必须被拒绝")
 	}
 }
+
+func TestRegistry_SelectReturnsSubsetInRequestedOrder(t *testing.T) {
+	registry := NewRegistry()
+	for _, name := range []string{"search", "calculator"} {
+		if err := registry.Register(context.Background(), namedTool(name)); err != nil {
+			t.Fatalf("注册 %s 失败: %v", name, err)
+		}
+	}
+
+	subset, err := registry.Select("calculator")
+	if err != nil {
+		t.Fatalf("按名称取出子集失败: %v", err)
+	}
+	if subset.Len() != 1 || subset.Names()[0] != "calculator" {
+		t.Fatalf("子集应只含 calculator，实际: %v", subset.Names())
+	}
+	// 注册表是进程级共享的，按请求裁剪不能把原注册表也裁掉。
+	if registry.Len() != 2 {
+		t.Fatalf("取子集不应改动原注册表，实际剩下 %d 个工具", registry.Len())
+	}
+
+	reordered, err := registry.Select("calculator", "search")
+	if err != nil {
+		t.Fatalf("按名称取出子集失败: %v", err)
+	}
+	if got := reordered.Names(); got[0] != "calculator" || got[1] != "search" {
+		t.Fatalf("子集顺序应按调用方给出顺序，实际: %v", got)
+	}
+}
+
+func TestRegistry_SelectRejectsUnknownOrDuplicateName(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(context.Background(), namedTool("search")); err != nil {
+		t.Fatalf("注册失败: %v", err)
+	}
+
+	if _, err := registry.Select("missing"); err == nil {
+		t.Fatal("未注册的工具名必须报错——悄悄少一个工具会让模型莫名不会检索")
+	}
+	if _, err := registry.Select(""); err == nil {
+		t.Fatal("空工具名必须报错")
+	}
+	if _, err := registry.Select("search", "search"); err == nil {
+		t.Fatal("重复工具名必须报错，避免把策略写错藏起来")
+	}
+}

@@ -122,7 +122,7 @@ V0.1 还差两件事（详见第 4 节与第 9 节）：
 | 控制台外壳（前端） | ✅ | `web/components/layout` | 全局导航 + 设置二级导航，三栏结构对齐 Dify；**只有内容区滚动**（见 web/AGENTS.md 第 4 节） |
 | **LLM 调用** | ✅ | `engine/model/{ollama,openai}` | 对话链路已按厂商能力实际调用 llm 模型（含 reasoning 思考过程），见第 4 节 #8 |
 | **Eino 内核接入** | 🚧 | `internal/engine` | RAG 问答与流式对话**已经过 Eino Graph**（`engine/chat`）；**智能体（ReAct）与工作流编排未做**，见 change `add-react-agent-chat` |
-| 智能体工具注册 | 🚧 | `engine/runtime` | 工具注册表 + 计算演示工具已落地并测（change `add-react-agent-chat`，2/28）；检索工具、ReAct 运行时、模型工具调用未做 |
+| 智能体工具注册 | 🚧 | `engine/runtime` | 工具注册表（支持按本次问答取子集）+ 计算演示工具 + 知识库检索工具已落地并测；检索范围按列表设计、当前只接受一个知识库（多个在发起检索前报错）；ReAct 运行时、模型工具调用未做（change `add-react-agent-chat`） |
 | 流式对话（SSE） | ✅ | `handler/chat.go` · `service/chat.go` · `engine/chat` | 经 Eino Graph 流式转发；四种事件：`citations`（引用，先发）→ `reasoning`（推理模型的思考过程，可选）→ `delta`（回答增量）→ `done`；思考过程不进正文、不落库 |
 | 对话前端（流式渲染） | ✅ | `web/components/chat` | 打字机逐字揭示（`hooks/use-typewriter.ts`）+ 块状光标 + 「思考过程」折叠块 + 钉底滚动（用户上翻时不打扰）+ 尊重系统「减少动效」 |
 | 检索追踪记录 | ⬜ | — | 表结构已设计（见 D6），未开始 |

@@ -89,5 +89,31 @@ func (r *Registry) Names() []string {
 	return out
 }
 
+// Select 按名称取出工具子集，用于「按本次问答组装可用工具集」。
+//
+// 返回新注册表而不是原地过滤：注册表是进程级共享的，按请求裁剪不能改动它。
+// 名称顺序按调用方给出顺序保留；名称拼错或重复一律报错——悄悄少一个工具
+// 会让模型"明明该能检索却不会检索"，而错误信息里不说明就无从排查。
+func (r *Registry) Select(names ...string) (*Registry, error) {
+	subset := NewRegistry()
+	for _, rawName := range names {
+		name := strings.TrimSpace(rawName)
+		if name == "" {
+			return nil, fmt.Errorf("组装工具集失败: 工具名不能为空")
+		}
+		entry, exists := r.byName[name]
+		if !exists {
+			return nil, fmt.Errorf("组装工具集失败: 未注册的工具 %q（已注册：%s）",
+				name, strings.Join(r.order, ", "))
+		}
+		if _, duplicated := subset.byName[name]; duplicated {
+			return nil, fmt.Errorf("组装工具集失败: 工具 %q 重复出现", name)
+		}
+		subset.byName[name] = entry
+		subset.order = append(subset.order, name)
+	}
+	return subset, nil
+}
+
 // Len 返回已注册的工具数量。
 func (r *Registry) Len() int { return len(r.order) }
