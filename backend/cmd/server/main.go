@@ -198,7 +198,7 @@ func main() {
 		vectorStore,
 	)
 
-	// 分词器在启动时构造一次：词典实现要加载内嵌词表（约 2 秒），
+	// 分词器在启动时构造一次：词典实现要加载内嵌词表（约 100~300 ms），
 	// 放进请求路径会让每次入库都多一段固定延迟。
 	keywordTokenizer, err := keyword.NewTokenizer(cfg.Keyword.Tokenizer)
 	if err != nil {

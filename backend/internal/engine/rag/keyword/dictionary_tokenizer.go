@@ -27,8 +27,8 @@ var defaultDomainWords = []string{
 // DictionaryTokenizer 是基于词典的中文分词器。
 //
 // 与 LocalTokenizer 的区别只在"候选怎么来"：这里由 gse 的内嵌词表给出词边界，
-// 后置过滤（子串抑制、停用词）仍然复用同一套规则；首尾虚词规则只用于未登录候选，
-// 词典词本身可信，不能再用它误杀「在线」这类正常词。
+// 后置过滤（子串抑制、停用词）仍然复用同一套规则；首尾虚词规则是为无词典候选设计的，
+// 这里不作用于词典词——词典词本身可信，套用该规则会误杀「在线」这类正常词。
 type DictionaryTokenizer struct {
 	seg gse.Segmenter
 }

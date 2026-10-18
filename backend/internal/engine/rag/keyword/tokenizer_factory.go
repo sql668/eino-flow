@@ -14,7 +14,7 @@ const (
 // NewTokenizer 按配置构造分词器。
 //
 // 工厂只负责"选实现"：初始化在应用启动时做一次，
-// 请求路径上不再构造（词典加载需要约 2 秒）。
+// 请求路径上不再构造（词典加载约 100~300 ms）。
 func NewTokenizer(kind string) (Tokenizer, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "", TokenizerLocal:
